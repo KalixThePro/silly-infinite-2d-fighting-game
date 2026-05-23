@@ -1,7 +1,16 @@
 import os
+import sys
 import pygame
 import random
 import math
+
+
+def resource_path(relative_path):
+    """Get the correct asset path when running normally or inside PyInstaller."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
 
 # --- INITIALIZATION ---
 pygame.init()
@@ -9,7 +18,7 @@ try:
     pygame.mixer.init()
     music_loaded = False
     try:
-        pygame.mixer.music.load("assets/background.mp3")
+        pygame.mixer.music.load(resource_path("assets/background.mp3"))
         pygame.mixer.music.set_volume(0.5)
         pygame.mixer.music.play(-1)  # loop forever
         music_loaded = True
@@ -18,6 +27,7 @@ try:
 except Exception:
     # Some platforms may not support mixer init in the same way
     music_loaded = False
+
 SCREEN_WIDTH = 1000
 SCREEN_HEIGHT = 700
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -30,23 +40,23 @@ small_font = pygame.font.SysFont("Arial", 18)
 large_font = pygame.font.SysFont("Arial", 64)
 
 # Load shop icons if available
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-assets_dir = os.path.join(BASE_DIR, "assets")
 esp_icon = None
 wall_icon = None
+
 try:
-    esp_path = os.path.join(assets_dir, "esp_icon.png")
+    esp_path = resource_path("assets/esp_icon.png")
     esp_icon = pygame.image.load(esp_path).convert_alpha()
     esp_icon = pygame.transform.smoothscale(esp_icon, (32, 32))
 except Exception as e:
-    print(f"Failed to load ESP icon from {esp_path}: {e}")
+    print(f"Failed to load ESP icon from assets/esp_icon.png: {e}")
     esp_icon = None
+
 try:
-    wall_path = os.path.join(assets_dir, "wall_icon.png")
+    wall_path = resource_path("assets/wall_icon.png")
     wall_icon = pygame.image.load(wall_path).convert_alpha()
     wall_icon = pygame.transform.smoothscale(wall_icon, (32, 32))
 except Exception as e:
-    print(f"Failed to load Wall icon from {wall_path}: {e}")
+    print(f"Failed to load Wall icon from assets/wall_icon.png: {e}")
     wall_icon = None
 
 # --- GAME STATE CONTROL ---
