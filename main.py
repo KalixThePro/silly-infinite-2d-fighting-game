@@ -412,11 +412,11 @@ class GoldItem:
 
 def drop_gold_for_enemy(enemy, gold_items_list):
     if enemy.type == "SPEEDY":
-        gold_amount = random.randint(0, 2)
+        gold_amount = random.randint(3, 7)
     elif enemy.type == "CHASER":
-        gold_amount = random.randint(1, 4)
+        gold_amount = random.randint(5, 12)
     else:
-        gold_amount = random.randint(5, 10)
+        gold_amount = random.randint(10, 30)
     if gold_amount > 0:
         gold_items_list.append(GoldItem(enemy.x, enemy.y, gold_amount))
 
