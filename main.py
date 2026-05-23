@@ -214,20 +214,18 @@ class Player:
         return min(1.0, elapsed / self.q_attack_cooldown)
 
 class EnemyProjectile:
-    def __init__(self, x, y, target_x, target_y):
+    def __init__(self, x, y, target_x, target_y, damage=5):
         self.x = x
         self.y = y
         self.speed = 7
         self.radius = 4
-        self.damage = 5
-        self.color = (255, 100, 100) # Lighter Red
-        
-        # Calculate localized distance angles
+        self.damage = damage
+        self.color = (255, 100, 100)
+
         dx = target_x - self.x
         dy = target_y - self.y
         distance = math.sqrt(dx**2 + dy**2)
-        
-        # Normalized unit direction vectors
+
         self.dx = (dx / distance) if distance > 0 else 0
         self.dy = (dy / distance) if distance > 0 else 0
 
@@ -236,16 +234,18 @@ class EnemyProjectile:
         self.y += self.dy * self.speed
 
 class BigEnemyProjectile:
-    def __init__(self, x, y, target_x, target_y):
+    def __init__(self, x, y, target_x, target_y, damage=20):
         self.x = x
         self.y = y
         self.speed = 4
         self.radius = 12
         self.color = (100, 120, 255)
-        self.damage = 20
+        self.damage = damage
+
         dx = target_x - self.x
         dy = target_y - self.y
-        dist = math.sqrt(dx*dx + dy*dy)
+        dist = math.sqrt(dx * dx + dy * dy)
+
         self.dx = (dx / dist) if dist > 0 else 0
         self.dy = (dy / dist) if dist > 0 else 0
 
@@ -539,26 +539,31 @@ class Enemy:
         self.x = x
         self.y = y
         self.type = enemy_type
-        self.damage = 10  # Raw impact contact damage
-        
+        self.damage = 10
+        self.projectile_damage = 0
+
         if enemy_type == "CHASER":
             self.speed = 2.5
-            self.color = (255, 51, 51)   # Red
+            self.color = (255, 51, 51)
             self.radius = 12
-            self.attack_range = 250      # Dynamic firing zone gap threshold
+            self.attack_range = 250
             self.is_waiting = False
             self.wait_start_time = 0
             self.hp = 5
             self.damage = 20
-        
+            self.projectile_damage = 5
+
         elif enemy_type == "SPEEDY":
             self.speed = 4.0
-            self.color = (255, 153, 0)   # Orange
+            self.color = (255, 153, 0)
             self.radius = 8
             self.hp = 1
+            self.damage = 10
+            self.projectile_damage = 0
+
         elif enemy_type == "TANK":
             self.speed = 1.5
-            self.color = (80, 80, 200)   # Blueish
+            self.color = (80, 80, 200)
             self.radius = 28
             self.attack_range = 400
             self.shoot_cooldown = 900
@@ -566,43 +571,43 @@ class Enemy:
             self.wait_start_time = 0
             self.hp = 20
             self.damage = 50
+            self.projectile_damage = 20
 
     def update_behavior(self, player_x, player_y, enemy_projectiles_list, all_enemies):
         dx = player_x - self.x
         dy = player_y - self.y
         distance = math.sqrt(dx**2 + dy**2)
 
-        # --- 1. BASE AI MOVEMENT CALCULATIONS ---
         move_x = 0
         move_y = 0
 
         if self.type == "SPEEDY":
-            # Orange tracking mechanics handle both X and Y axes fluidly
             if distance > 0:
                 move_x = (dx / distance) * self.speed
                 move_y = (dy / distance) * self.speed
-                
+
         elif self.type == "CHASER":
             if distance > self.attack_range:
-                # Outside combat parameters: pursue target point
                 self.is_waiting = False
                 if distance > 0:
                     move_x = (dx / distance) * self.speed
                     move_y = (dy / distance) * self.speed
             else:
-                # Inside combat parameters: attack, but only move away if too close
                 current_time = pygame.time.get_ticks()
                 if not self.is_waiting:
                     self.is_waiting = True
                     self.wait_start_time = current_time
-                else:
-                    if current_time - self.wait_start_time >= 400:
-                        enemy_projectiles_list.append(EnemyProjectile(self.x, self.y, player_x, player_y))
-                        self.wait_start_time = current_time
+                elif current_time - self.wait_start_time >= 400:
+                    enemy_projectiles_list.append(
+                        EnemyProjectile(self.x, self.y, player_x, player_y, self.projectile_damage)
+                    )
+                    self.wait_start_time = current_time
+
                 min_safe_distance = 100
                 if distance < min_safe_distance and distance > 0:
                     move_x = (self.x - player_x) / distance * self.speed
                     move_y = (self.y - player_y) / distance * self.speed
+
         elif self.type == "TANK":
             if distance > self.attack_range:
                 self.is_waiting = False
@@ -615,29 +620,33 @@ class Enemy:
                     self.is_waiting = True
                     self.wait_start_time = current_time
                 elif current_time - self.wait_start_time >= self.shoot_cooldown:
-                    enemy_projectiles_list.append(BigEnemyProjectile(self.x, self.y, player_x, player_y))
+                    enemy_projectiles_list.append(
+                        BigEnemyProjectile(self.x, self.y, player_x, player_y, self.projectile_damage)
+                    )
                     self.wait_start_time = current_time
+
                 min_safe_distance = 30
                 if distance < min_safe_distance and distance > 0:
                     move_x = (self.x - player_x) / distance * self.speed
                     move_y = (self.y - player_y) / distance * self.speed
 
-        # --- 2. SEPARATION LOGIC (Flocking behavior override) ---
         separation_distance = 70
         separation_force = 1.2
         for other in all_enemies:
             if other is self:
                 continue
+
             s_dx = self.x - other.x
             s_dy = self.y - other.y
             s_dist = math.sqrt(s_dx**2 + s_dy**2)
+
             if 0 < s_dist < separation_distance:
                 move_x += (s_dx / s_dist) * separation_force
                 move_y += (s_dy / s_dist) * separation_force
 
-        # --- 3. EXECUTE POSITIONING WRITE TRANSLATION ---
         self.x += move_x
         self.y += move_y
+
 
 # --- ENTITY GENERATION SYSTEM ---
 player = Player()
@@ -652,18 +661,29 @@ charges = []
 
 # Enemy spawn timing settings
 SPAWN_INTERVAL_BASE = 1500
-SPAWN_SPEEDUP_MAX_MULTIPLIER = 1.5
-SPAWN_SPEEDUP_DURATION = 60000  # 60 seconds to reach max spawn speed
-ENEMY_SCALING_INTERVAL = 10000  # every 10 seconds
-ENEMY_SCALING_FACTOR = 0.95
-TANK_SPAWN_DELAY = 40000  # tank enemies only appear after this many ms
+
+ENEMY_STAT_SCALING_INTERVAL = 10000
+ENEMY_STAT_SCALING_FACTOR = 1.05
+
+SPAWN_INTERVAL_SCALING_INTERVAL = 10000
+SPAWN_INTERVAL_SCALING_FACTOR = 0.95
+MIN_SPAWN_INTERVAL = 250
+
+TANK_SPAWN_DELAY = 40000
+
 spawn_start_time = pygame.time.get_ticks()
 last_spawn_time = spawn_start_time
 
-def get_future_enemy_scale():
+def get_enemy_stat_scale():
     elapsed = pygame.time.get_ticks() - spawn_start_time
-    steps = elapsed // ENEMY_SCALING_INTERVAL
-    return ENEMY_SCALING_FACTOR ** steps
+    steps = elapsed // ENEMY_STAT_SCALING_INTERVAL
+    return ENEMY_STAT_SCALING_FACTOR ** steps
+
+
+def get_spawn_interval_scale():
+    elapsed = pygame.time.get_ticks() - spawn_start_time
+    steps = elapsed // SPAWN_INTERVAL_SCALING_INTERVAL
+    return SPAWN_INTERVAL_SCALING_FACTOR ** steps
 
 def spawn_enemy_offscreen():
     angle = random.uniform(0, math.pi * 2)
@@ -681,9 +701,12 @@ def spawn_enemy_offscreen():
         enemy_type = "SPEEDY"
 
     enemy = Enemy(spawn_x, spawn_y, enemy_type)
-    scale = get_future_enemy_scale()
-    enemy.speed *= scale
-    enemy.hp = max(1.0, enemy.hp * scale)
+
+    stat_scale = get_enemy_stat_scale()
+    enemy.hp *= stat_scale
+    enemy.damage *= stat_scale
+    enemy.projectile_damage *= stat_scale
+
     enemies.append(enemy)
 
 def reset_game():
@@ -767,9 +790,8 @@ while running:
     # 2. RUNTIME LOGIC CALCULATIONS
     if game_state == "PLAYING":
         current_time = pygame.time.get_ticks()
-        elapsed_since_start = current_time - spawn_start_time
-        speed_multiplier = 1.0 + min(elapsed_since_start, SPAWN_SPEEDUP_DURATION) / SPAWN_SPEEDUP_DURATION * (SPAWN_SPEEDUP_MAX_MULTIPLIER - 1.0)
-        current_spawn_interval = int(SPAWN_INTERVAL_BASE / speed_multiplier)
+        spawn_interval_scale = get_spawn_interval_scale()
+        current_spawn_interval = max(MIN_SPAWN_INTERVAL, int(SPAWN_INTERVAL_BASE * spawn_interval_scale))
         if current_time - last_spawn_time >= current_spawn_interval:
             spawn_enemy_offscreen()
             last_spawn_time = current_time
