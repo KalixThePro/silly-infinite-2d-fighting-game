@@ -5,23 +5,57 @@ import random
 import math
 
 
+
 def resource_path(relative_path):
     """Get the correct asset path when running normally or inside PyInstaller."""
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
 
+def play_next_song():
+    global current_track_index, current_song_name, song_text_start_time
+
+    if not music_tracks:
+        return
+
+    current_track_index = (current_track_index + 1) % len(music_tracks)
+    current_song_name = os.path.splitext(music_tracks[current_track_index])[0]
+    song_text_start_time = pygame.time.get_ticks()
+
+    pygame.mixer.music.load(os.path.join(resource_path("assets"), music_tracks[current_track_index]))
+    pygame.mixer.music.play()
 
 # --- INITIALIZATION ---
 pygame.init()
+MUSIC_END_EVENT = pygame.USEREVENT + 1
+music_tracks = []
+current_track_index = 0
+current_song_name = ""
+song_text_start_time = 0
+song_text_duration = 3500
 try:
     pygame.mixer.init()
     music_loaded = False
     try:
-        pygame.mixer.music.load(resource_path("assets/background.mp3"))
+        music_folder = resource_path("assets")
+        music_tracks = [
+            file_name for file_name in os.listdir(music_folder)
+            if file_name.lower().endswith((".mp3", ".ogg", ".wav"))
+        ]
+
+        random.shuffle(music_tracks)
+
         pygame.mixer.music.set_volume(0.5)
-        pygame.mixer.music.play(-1)  # loop forever
-        music_loaded = True
+        pygame.mixer.music.set_endevent(MUSIC_END_EVENT)
+
+        if music_tracks:
+            current_track_index = 0
+            current_song_name = os.path.splitext(music_tracks[current_track_index])[0]
+            song_text_start_time = pygame.time.get_ticks()
+
+            pygame.mixer.music.load(os.path.join(music_folder, music_tracks[current_track_index]))
+            pygame.mixer.music.play()
+            music_loaded = True
     except Exception as e:
         print("Failed to load music:", e)
 except Exception:
@@ -35,9 +69,10 @@ pygame.display.set_caption("2D Infinite Roguelike")
 clock = pygame.time.Clock()
 
 # Initialize Font System for UI text rendering
-font = pygame.font.SysFont("Arial", 24)
-small_font = pygame.font.SysFont("Arial", 18)
-large_font = pygame.font.SysFont("Arial", 64)
+FONT_PATH = resource_path("assets/fonts/VCR_OSD_MONO_1.001.ttf")
+font = pygame.font.Font(FONT_PATH, 24)
+small_font = pygame.font.Font(FONT_PATH, 18)
+large_font = pygame.font.Font(FONT_PATH, 64)
 
 
 ESP_COST = 100
@@ -45,15 +80,28 @@ WALL_COST = 50
 ARROWS_COST = 100
 MARKSMAN_COST = 150
 SNIPER_COST = 200
-SPINNY_SWORD_COST = 200
-DOUBLE_BLADE_COST = 200
-QUAD_BLADE_COST = 250
+SPINNY_SWORD_COST = 500
+DOUBLE_BLADE_COST = 1000
+QUAD_BLADE_COST = 1500
 LASER_COST = 500
 DOUBLE_LASER_COST = 500
 GOLD_PULSE_COST = 50
 GOLD_PULSE_UPGRADE_COST = 200
 MAGNET_COST = 200
 MAGNET_UPGRADE_COST = 300
+STAT_MAX_UPGRADE_COST = 500
+STAT_MAX_UPGRADE_AMOUNT = 5
+WALL_UPGRADE_1_COST = 250
+WALL_UPGRADE_2_COST = 1000
+BOSS_SPAWN_EVENTS = [
+    (120000, 1.0, 1.0),
+    (180000, 2.0, 1.5),
+    (210000, 2.0, 5.0),
+    (250000, 4.0, 5.0),
+    (300000, 4.0, 5.0),
+    (310000, 4.5, 5.0),
+    (310000, 10.0, 0.5),
+]
 
 # --- GAME STATE CONTROL ---
 game_state = "PLAYING"  # Can be "PLAYING" or "GAME_OVER"
@@ -76,6 +124,15 @@ class Player:
         self.magnet_cooldown = 6000  # 6 seconds
         self.xp_growth_multiplier = 1.1
         self.xp_growth_decay = 0.8
+        self.wall_level = 0
+        self.stat_max_levels = {
+            "speed": 10,
+            "damage": 10,
+            "health": 10,
+            "regen": 10,
+            "attack_size": 10,
+            "attack_speed": 10
+        }
 
         # HP Engine Variables
         self.base_max_hp = 100
@@ -107,14 +164,24 @@ class Player:
         self.shockwave_unlocked = False
         self.wall_attack_unlocked = False
         
-
-
-        self.max_upgrades = 10
         self.last_regen_time = pygame.time.get_ticks()
         
         # Movement Direction Tracking
         self.facing_x = 0
         self.facing_y = -1  # Default facing up
+
+    def get_stat_max(self, stat_name):
+        return self.stat_max_levels[stat_name]
+    
+    def can_buy_stat_max_upgrade(self, stat_name):
+        return self.gold >= STAT_MAX_UPGRADE_COST
+    
+    def buy_stat_max_upgrade(self, stat_name):
+        if self.can_buy_stat_max_upgrade(stat_name):
+            self.gold -= STAT_MAX_UPGRADE_COST
+            self.stat_max_levels[stat_name] += STAT_MAX_UPGRADE_AMOUNT
+            return True
+        return False
 
     def get_cooldown_multiplier(self):
         return max(0.5, 1.0 - self.attack_speed_level * 0.05)
@@ -340,6 +407,50 @@ class PlayerArrow:
         self.x += self.dx * self.speed
         self.y += self.dy * self.speed
 
+class SpinningSword:
+    def __init__(self, player, angle_offset):
+        self.player = player
+        self.angle_offset = angle_offset
+        self.orbit_radius = 62
+        self.base_length = 42
+        self.width = 10
+        self.damage = 5
+        self.hit_cooldown = 350
+        self.hit_times = {}
+
+    def get_angle(self):
+        spin_speed = 0.008 * (1.0 + self.player.attack_speed_level * 0.08)
+        return pygame.time.get_ticks() * spin_speed + self.angle_offset
+
+    def get_length(self):
+        return self.base_length + self.player.attack_size_level * 5
+
+    def get_position(self):
+        angle = self.get_angle()
+        length = self.get_length()
+        center_distance = self.orbit_radius + length / 2
+
+        x = self.player.x + math.cos(angle) * center_distance
+        y = self.player.y + math.sin(angle) * center_distance
+        return x, y
+
+    def get_tip_position(self):
+        angle = self.get_angle()
+        length = self.get_length()
+        tip_distance = self.orbit_radius + length
+
+        x = self.player.x + math.cos(angle) * tip_distance
+        y = self.player.y + math.sin(angle) * tip_distance
+        return x, y
+
+    def can_hit(self, enemy):
+        current_time = pygame.time.get_ticks()
+        last_hit = self.hit_times.get(enemy, 0)
+        return current_time - last_hit >= self.hit_cooldown
+
+    def mark_hit(self, enemy):
+        self.hit_times[enemy] = pygame.time.get_ticks()
+
 class Shockwave:
     def __init__(self, x, y, delay=0, max_radius=250):
         self.x = x
@@ -456,7 +567,10 @@ class XPItem:
         self.magnet_start_time = 0
         self.color = (0, 100, 255)  # Blue
         self.xp_amount = xp_amount
-        if xp_amount > 1:
+
+        if xp_amount >= 10:
+            self.color = (60, 255, 100)  # Green for high-value XP
+        elif xp_amount > 1:
             self.color = (150, 50, 200)  # Purple for tank XP
     
     def update(self, player_x, player_y):
@@ -534,9 +648,23 @@ def drop_gold_for_enemy(enemy, gold_items_list):
 
 
 def drop_xp_for_enemy(enemy, xp_items_list):
+    if enemy.type == "BOSS":
+        for _ in range(3):
+            xp_items_list.append(XPItem(
+                enemy.x + random.randint(-25, 25),
+                enemy.y + random.randint(-25, 25),
+                random.randint(10, 15)
+            ))
+        return
+
+    if enemy.type == "TANK" and random.random() < 0.1:
+        xp_items_list.append(XPItem(enemy.x, enemy.y, random.randint(10, 15)))
+        return
+
     base_amount = 3 if enemy.type == "TANK" else 1
     if enemy.type in ("CHASER", "SPEEDY") and random.random() < 0.1:
         base_amount = 3
+
     xp_roll = random.random()
     if xp_roll < 0.05:
         xp_amount = base_amount * 3
@@ -544,6 +672,7 @@ def drop_xp_for_enemy(enemy, xp_items_list):
         xp_amount = base_amount * 2
     else:
         xp_amount = base_amount
+
     xp_items_list.append(XPItem(enemy.x, enemy.y, xp_amount))
 
 
@@ -595,7 +724,7 @@ class WallCharge:
         self.color = (200, 180, 255)
         self.arc_angle = player.get_q_attack_arc()
         # inner radius used to make the wall have thickness
-        self.inner_radius = max(0, self.range - self.width)
+        self.inner_radius = 80
         self.is_active = True
         self.hit_enemies = set()
 
@@ -687,6 +816,19 @@ class Enemy:
             self.hp = 20
             self.damage = 20
             self.projectile_damage = 10
+        
+        elif enemy_type == "BOSS":
+            self.speed = 1.0
+            self.color = (40, 190, 70)
+            self.radius = 55
+            self.attack_range = 520
+            self.shoot_cooldown = 1400
+            self.stomp_cooldown = 3500
+            self.last_shot_time = 0
+            self.last_stomp_time = 0
+            self.hp = 250
+            self.damage = 99999999
+            self.projectile_damage = 18
 
     def update_behavior(self, player_x, player_y, enemy_projectiles_list, all_enemies):
         dx = player_x - self.x
@@ -745,6 +887,33 @@ class Enemy:
                     move_x = (self.x - player_x) / distance * self.speed
                     move_y = (self.y - player_y) / distance * self.speed
 
+        elif self.type == "BOSS":
+            current_time = pygame.time.get_ticks()
+
+            if distance > 220 and distance > 0:
+                move_x = (dx / distance) * self.speed
+                move_y = (dy / distance) * self.speed
+            
+            if distance < self.attack_range and current_time - self.last_shot_time >= self.shoot_cooldown:
+                for angle_offset in (-0.25, 0, 0.25):
+                    base_angle = math.atan2(dy, dx) + angle_offset
+                    target_x = self.x + math.cos(base_angle) * 100
+                    target_y = self.y + math.sin(base_angle) * 100
+                    enemy_projectiles_list.append(
+                        BigEnemyProjectile(self.x, self.y, target_x, target_y, self.projectile_damage)
+                    )
+                    self.last_shot_time = current_time
+
+            if distance < 180 and current_time - self.last_stomp_time >= self.stomp_cooldown:
+                enemy_projectiles_list.append(
+                    BigEnemyProjectile(self.x, self.y, player_x, player_y, self.projectile_damage * 2)
+                )
+                enemy_projectiles_list[-1].radius = 28
+                enemy_projectiles_list[-1].speed = 2
+                enemy_projectiles_list[-1].color = (80, 255, 120)
+                self.last_stomp_time = current_time
+
+
         separation_distance = 30
         separation_force = 1.2
         for other in all_enemies:
@@ -790,6 +959,7 @@ gold_items = []
 charges = []
 player_arrows = []
 sniper_trails = []
+spinning_swords = []
 
 
 # Enemy spawn timing settings
@@ -806,6 +976,7 @@ TANK_SPAWN_DELAY = 20000
 
 spawn_start_time = pygame.time.get_ticks()
 last_spawn_time = spawn_start_time
+boss_spawn_index = 0
 
 def get_enemy_stat_scale():
     elapsed = pygame.time.get_ticks() - spawn_start_time
@@ -842,8 +1013,36 @@ def spawn_enemy_offscreen():
 
     enemies.append(enemy)
 
+def spawn_boss_offscreen(hp_multiplier=1.0, damage_multiplier=1.0):
+    global boss_spawn_index
+    angle = random.uniform(0, math.pi * 2)
+    spawn_distance = max(SCREEN_WIDTH, SCREEN_HEIGHT) / 1.1
+    spawn_x = player.x + math.cos(angle) * spawn_distance
+    spawn_y = player.y + math.sin(angle) * spawn_distance
+
+    boss = Enemy(spawn_x, spawn_y, "BOSS")
+    boss.hp *= hp_multiplier
+    boss.damage *= damage_multiplier
+    boss.projectile_damage *= damage_multiplier
+    enemies.append(boss)
+
+def set_spinning_swords_for_level():
+    spinning_swords.clear()
+
+    if player.blade_level == 1:
+        offsets = [0]
+    elif player.blade_level == 2:
+        offsets = [0, math.pi]
+    elif player.blade_level == 3:
+        offsets = [0, math.pi / 2, math.pi, math.pi * 1.5]
+    else:
+        offsets = []
+
+    for offset in offsets:
+        spinning_swords.append(SpinningSword(player, offset))
+
 def reset_game():
-    global player, enemies, enemy_projectiles, game_state, shockwaves, slashes, heal_items, xp_items, gold_items, charges, player_arrows, sniper_trails, spawn_start_time, last_spawn_time
+    global player, enemies, enemy_projectiles, game_state, shockwaves, slashes, heal_items, xp_items, gold_items, charges, player_arrows, sniper_trails, spinning_swords, spawn_start_time, last_spawn_time, boss_spawn_index
     player = Player()
     enemies = []
     enemy_projectiles = []
@@ -855,12 +1054,14 @@ def reset_game():
     charges = []
     player_arrows = []
     sniper_trails = []
+    spinning_swords = []
     game_state = "PLAYING"
     spawn_start_time = pygame.time.get_ticks()
     last_spawn_time = spawn_start_time
+    boss_spawn_index = 0
     try:
         if music_loaded:
-            pygame.mixer.music.play(-1)
+            pygame.mixer.music.play()
     except Exception:
         pass
 
@@ -881,6 +1082,17 @@ while running:
     regen_upgrade_rect = pygame.Rect(button_x, button_start_y + 90, button_width, button_height)
     attack_size_upgrade_rect = pygame.Rect(button_x, button_start_y + 120, button_width, button_height)
     attack_speed_upgrade_rect = pygame.Rect(button_x, button_start_y + 150, button_width, button_height)
+
+    max_button_width = 58
+    max_button_x = button_x + button_width + 8
+
+    speed_max_rect = pygame.Rect(max_button_x, button_start_y, max_button_width, button_height)
+    damage_max_rect = pygame.Rect(max_button_x, button_start_y + 30, max_button_width, button_height)
+    health_max_rect = pygame.Rect(max_button_x, button_start_y + 60, max_button_width, button_height)
+    regen_max_rect = pygame.Rect(max_button_x, button_start_y + 90, max_button_width, button_height)
+    attack_size_max_rect = pygame.Rect(max_button_x, button_start_y + 120, max_button_width, button_height)
+    attack_speed_max_rect = pygame.Rect(max_button_x, button_start_y + 150, max_button_width, button_height)
+
     shop_box_size = 40
     shop_start_x = SCREEN_WIDTH - 20 - shop_box_size
     shop_start_y = 20
@@ -888,57 +1100,75 @@ while running:
     wall_box_rect = pygame.Rect(shop_start_x, shop_start_y + shop_box_size + 20, shop_box_size, shop_box_size)
     arrow_box_rect = pygame.Rect(shop_start_x - 90, shop_start_y + (shop_box_size + 20) * 2, 130, shop_box_size)
     magnet_box_rect = pygame.Rect(shop_start_x - 90, shop_start_y + (shop_box_size + 20) * 3, 130, shop_box_size)
+    sword_box_rect = pygame.Rect(shop_start_x - 90, shop_start_y + (shop_box_size + 20) * 4, 130, shop_box_size)
+    
     # 1. ENGINE INPUT EVENTS
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+
+        if event.type == MUSIC_END_EVENT:
+            play_next_song()
             
         if game_state == "PLAYING":
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_1 and player.stat_points > 0 and player.speed_level < player.max_upgrades:
+                if event.key == pygame.K_1 and player.stat_points > 0 and player.speed_level < player.get_stat_max("speed"):
                     player.speed_level += 1
                     player.stat_points -= 1
 
-                elif event.key == pygame.K_2 and player.stat_points > 0 and player.damage_level < player.max_upgrades:
+                elif event.key == pygame.K_2 and player.stat_points > 0 and player.damage_level < player.get_stat_max("damage"):
                     player.damage_level += 1
                     player.stat_points -= 1
 
-                elif event.key == pygame.K_3 and player.stat_points > 0 and player.health_level < player.max_upgrades:
+                elif event.key == pygame.K_3 and player.stat_points > 0 and player.health_level < player.get_stat_max("health"):
                     player.health_level += 1
                     player.base_max_hp += 20
                     player.hp = min(player.hp + 20, player.get_max_hp())
                     player.stat_points -= 1
 
-                elif event.key == pygame.K_4 and player.stat_points > 0 and player.regen_level < player.max_upgrades:
+                elif event.key == pygame.K_4 and player.stat_points > 0 and player.regen_level < player.get_stat_max("regen"):
                     player.regen_level += 1
                     player.stat_points -= 1
 
-                elif event.key == pygame.K_5 and player.stat_points > 0 and player.attack_size_level < player.max_upgrades:
+                elif event.key == pygame.K_5 and player.stat_points > 0 and player.attack_size_level < player.get_stat_max("attack_size"):
                     player.attack_size_level += 1
                     player.stat_points -= 1
-                
-                elif event.key == pygame.K_6 and player.stat_points > 0 and player.attack_speed_level < player.max_upgrades:
+
+                elif event.key == pygame.K_6 and player.stat_points > 0 and player.attack_speed_level < player.get_stat_max("attack_speed"):
                     player.attack_speed_level += 1
                     player.stat_points -= 1
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.speed_level < player.max_upgrades:
+                if sword_box_rect.collidepoint(event.pos):
+                    if player.blade_level == 0 and player.gold >= SPINNY_SWORD_COST:
+                        player.gold -= SPINNY_SWORD_COST
+                        player.blade_level = 1
+                        set_spinning_swords_for_level()
+                    elif player.blade_level == 1 and player.gold >= DOUBLE_BLADE_COST:
+                        player.gold -= DOUBLE_BLADE_COST
+                        player.blade_level = 2
+                        set_spinning_swords_for_level()
+                    elif player.blade_level == 2 and player.gold >= QUAD_BLADE_COST:
+                        player.gold -= QUAD_BLADE_COST
+                        player.blade_level = 3
+                        set_spinning_swords_for_level()
+                if speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.speed_level < player.get_stat_max("speed"):
                     player.speed_level += 1
                     player.stat_points -= 1
-                if damage_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.damage_level < player.max_upgrades:
+                if damage_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.damage_level < player.get_stat_max("damage"):
                     player.damage_level += 1
                     player.stat_points -= 1
-                if health_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.health_level < player.max_upgrades:
+                if health_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.health_level < player.get_stat_max("health"):
                     player.health_level += 1
                     player.base_max_hp += 20
                     player.hp = min(player.hp + 20, player.get_max_hp())
                     player.stat_points -= 1
-                if regen_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.regen_level < player.max_upgrades:
+                if regen_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.regen_level < player.get_stat_max("regen"):
                     player.regen_level += 1
                     player.stat_points -= 1
-                if attack_size_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_size_level < player.max_upgrades:
+                if attack_size_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_size_level < player.get_stat_max("attack_size"):
                     player.attack_size_level += 1
                     player.stat_points -= 1
-                if attack_speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_speed_level < player.max_upgrades:
+                if attack_speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_speed_level < player.get_stat_max("attack_speed"):
                     player.attack_speed_level += 1
                     player.stat_points -= 1
                 if magnet_box_rect.collidepoint(event.pos):
@@ -951,9 +1181,17 @@ while running:
                 if esp_box_rect.collidepoint(event.pos) and not player.shockwave_unlocked and player.gold >= ESP_COST:
                     player.gold -= ESP_COST
                     player.shockwave_unlocked = True
-                if wall_box_rect.collidepoint(event.pos) and not player.wall_attack_unlocked and player.gold >= WALL_COST:
-                    player.gold -= WALL_COST
-                    player.wall_attack_unlocked = True
+                if wall_box_rect.collidepoint(event.pos):
+                    if player.wall_level == 0 and player.gold >= WALL_COST:
+                        player.gold -= WALL_COST
+                        player.wall_level = 1
+                        player.wall_attack_unlocked = True
+                    elif player.wall_level == 1 and player.gold >= WALL_UPGRADE_1_COST:
+                        player.gold -= WALL_UPGRADE_1_COST
+                        player.wall_level = 2
+                    elif player.wall_level == 2 and player.gold >= WALL_UPGRADE_2_COST:
+                        player.gold -= WALL_UPGRADE_2_COST
+                        player.wall_level = 3
                 if arrow_box_rect.collidepoint(event.pos):
                     if player.arrow_level == 0 and player.gold >= ARROWS_COST:
                         player.gold -= ARROWS_COST
@@ -964,7 +1202,19 @@ while running:
                     elif player.arrow_level == 2 and player.gold >= SNIPER_COST:
                         player.gold -= SNIPER_COST
                         player.arrow_level = 3
-                      
+                if speed_max_rect.collidepoint(event.pos):
+                    player.buy_stat_max_upgrade("speed")
+                if damage_max_rect.collidepoint(event.pos):
+                    player.buy_stat_max_upgrade("damage")
+                if health_max_rect.collidepoint(event.pos):
+                    player.buy_stat_max_upgrade("health")
+                if regen_max_rect.collidepoint(event.pos):
+                    player.buy_stat_max_upgrade("regen")
+                if attack_size_max_rect.collidepoint(event.pos):
+                    player.buy_stat_max_upgrade("attack_size")
+                if attack_speed_max_rect.collidepoint(event.pos):
+                    player.buy_stat_max_upgrade("attack_speed")
+
         elif game_state == "GAME_OVER":
             if event.type == pygame.MOUSEBUTTONDOWN:
                 restart_btn = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 + 20, 200, 50)
@@ -974,6 +1224,46 @@ while running:
     # 2. RUNTIME LOGIC CALCULATIONS
     if game_state == "PLAYING":
         current_time = pygame.time.get_ticks()
+        for sword in spinning_swords:
+            base_x = player.x + math.cos(sword.get_angle()) * sword.orbit_radius
+            base_y = player.y + math.sin(sword.get_angle()) * sword.orbit_radius
+            tip_x, tip_y = sword.get_tip_position()
+
+            for enemy in enemies[:]:
+                blade_dx = tip_x - base_x
+                blade_dy = tip_y - base_y
+                blade_len_sq = blade_dx * blade_dx + blade_dy * blade_dy
+
+                if blade_len_sq == 0:
+                    continue
+
+                t = ((enemy.x - base_x) * blade_dx + (enemy.y - base_y) * blade_dy) / blade_len_sq
+                t = max(0, min(1, t))
+
+                closest_x = base_x + blade_dx * t
+                closest_y = base_y + blade_dy * t
+
+                dx = enemy.x - closest_x
+                dy = enemy.y - closest_y
+                dist = math.sqrt(dx * dx + dy * dy)
+
+                if dist < enemy.radius + sword.width / 2 and sword.can_hit(enemy):
+                    sword.mark_hit(enemy)
+                    enemy.hp -= sword.damage * player.get_damage_multiplier()
+
+                    if enemy.hp <= 0:
+                        if random.random() < 0.1:
+                            heal_items.append(HealItem(enemy.x, enemy.y))
+                        else:
+                            drop_xp_for_enemy(enemy, xp_items)
+                        drop_gold_for_enemy(enemy, gold_items)
+                        enemies.remove(enemy)
+        elapsed_since_start = current_time - spawn_start_time
+        if boss_spawn_index < len(BOSS_SPAWN_EVENTS):
+            boss_spawn_time, boss_hp_mult, boss_damage_mult = BOSS_SPAWN_EVENTS[boss_spawn_index]
+            if elapsed_since_start >= boss_spawn_time:
+                spawn_boss_offscreen(boss_hp_mult, boss_damage_mult)
+                boss_spawn_index += 1
         for trail in sniper_trails[:]:
             if current_time - trail["spawn_time"] >= trail["duration"]:
                 sniper_trails.remove(trail)  
@@ -1008,7 +1298,20 @@ while running:
         
         if keys[pygame.K_q]:
             if player.use_q_attack():
-                charges.append(WallCharge(player, player.facing_x, player.facing_y))
+                forward_x = player.facing_x
+                forward_y = player.facing_y
+
+                directions = [(forward_x, forward_y)]
+
+                if player.wall_level >= 2:
+                    directions.append((-forward_x, -forward_y))
+
+                if player.wall_level >= 3:
+                    directions.append((-forward_y, forward_x))
+                    directions.append((forward_y, -forward_x))
+
+                for dir_x, dir_y in directions:
+                    charges.append(WallCharge(player, dir_x, dir_y))
         if player.can_fire_arrow() and enemies:
             nearest_enemy = min(
                 enemies,
@@ -1101,7 +1404,8 @@ while running:
             charge.update()
             if not charge.is_active:
                 charges.remove(charge)
-                player.has_active_charge = False
+                if not charges:
+                    player.has_active_charge = False
             else:
                 # Check enemy collisions
                 hit_enemies = charge.check_collision(enemies)
@@ -1425,12 +1729,12 @@ while running:
         regen_upgrade_rect = pygame.Rect(button_x, button_start_y + 90, button_width, button_height)
         attack_size_upgrade_rect = pygame.Rect(button_x, button_start_y + 120, button_width, button_height)
         attack_speed_upgrade_rect = pygame.Rect(button_x, button_start_y + 150, button_width, button_height)
-        speed_ready = player.can_upgrade() and player.speed_level < player.max_upgrades
-        damage_ready = player.can_upgrade() and player.damage_level < player.max_upgrades
-        health_ready = player.can_upgrade() and player.health_level < player.max_upgrades
-        regen_ready = player.can_upgrade() and player.regen_level < player.max_upgrades
-        attack_size_ready = player.can_upgrade() and player.attack_size_level < player.max_upgrades
-        attack_speed_ready = player.can_upgrade() and player.attack_speed_level < player.max_upgrades
+        speed_ready = player.can_upgrade() and player.speed_level < player.get_stat_max("speed")
+        damage_ready = player.can_upgrade() and player.damage_level < player.get_stat_max("damage")
+        health_ready = player.can_upgrade() and player.health_level < player.get_stat_max("health")
+        regen_ready = player.can_upgrade() and player.regen_level < player.get_stat_max("regen")
+        attack_size_ready = player.can_upgrade() and player.attack_size_level < player.get_stat_max("attack_size")
+        attack_speed_ready = player.can_upgrade() and player.attack_speed_level < player.get_stat_max("attack_speed")
         attack_speed_button_color = (100, 180, 255) if attack_speed_ready else (70, 70, 100)
 
         speed_button_color = (100, 180, 255) if speed_ready else (70, 70, 100)
@@ -1453,38 +1757,151 @@ while running:
         pygame.draw.rect(screen, (255, 255, 255), regen_upgrade_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), attack_size_upgrade_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), attack_speed_upgrade_rect, 1)
+
+        # Gold Increase Max Stat boxes
+        stat_max_buttons = [
+            (speed_max_rect, "speed"),
+            (damage_max_rect, "damage"),
+            (health_max_rect, "health"),
+            (regen_max_rect, "regen"),
+            (attack_size_max_rect, "attack_size"),
+            (attack_speed_max_rect, "attack_speed"),
+        ]
+        
+        for rect, stat_name in stat_max_buttons:
+            color = (180, 145, 40) if player.can_buy_stat_max_upgrade(stat_name) else (90, 75, 35)
+            pygame.draw.rect(screen, color, rect)
+            pygame.draw.rect(screen, (255, 235, 150), rect, 1)
+            label = small_font.render("+5", True, (255, 255, 255))
+            screen.blit(label, label.get_rect(center=rect.center))
+
+        # Draw swords
+        for sword in spinning_swords:
+            angle = sword.get_angle()
+            length = sword.get_length()
+
+            base_x = player.x + math.cos(angle) * sword.orbit_radius
+            base_y = player.y + math.sin(angle) * sword.orbit_radius
+            tip_x = player.x + math.cos(angle) * (sword.orbit_radius + length)
+            tip_y = player.y + math.sin(angle) * (sword.orbit_radius + length)
+
+            base_screen = (int(base_x + camera_x), int(base_y + camera_y))
+            tip_screen = (int(tip_x + camera_x), int(tip_y + camera_y))
+
+            pygame.draw.line(screen, (225, 225, 240), base_screen, tip_screen, sword.width)
+            pygame.draw.line(screen, (255, 255, 255), base_screen, tip_screen, 2)
+
+            guard_angle = angle + math.pi / 2
+            guard_half = 9
+            guard_a = (
+                int(base_x + math.cos(guard_angle) * guard_half + camera_x),
+                int(base_y + math.sin(guard_angle) * guard_half + camera_y)
+            )
+            guard_b = (
+                int(base_x - math.cos(guard_angle) * guard_half + camera_x),
+                int(base_y - math.sin(guard_angle) * guard_half + camera_y)
+            )
+            pygame.draw.line(screen, (170, 150, 95), guard_a, guard_b, 4)
+        # Draw sword shop UI
+        if player.blade_level == 0:
+            sword_label_text = "Orbit Swords"
+            sword_price_text = f"{SPINNY_SWORD_COST}g"
+        elif player.blade_level == 1:
+            sword_label_text = "Double Swords"
+            sword_price_text = f"{DOUBLE_BLADE_COST}g"
+        elif player.blade_level == 2:
+            sword_label_text = "Quad Swords"
+            sword_price_text = f"{QUAD_BLADE_COST}g"
+        else:
+            sword_label_text = "Quad"
+            sword_price_text = "Owned"
+
+        sword_color = (80, 180, 120) if player.blade_level == 3 else (120, 120, 120)
+        pygame.draw.rect(screen, sword_color, sword_box_rect)
+        pygame.draw.rect(screen, (255, 255, 255), sword_box_rect, 1)
+
+        sword_label = small_font.render(sword_label_text, True, (255, 255, 255))
+        screen.blit(sword_label, sword_label.get_rect(center=sword_box_rect.center))
+
+        sword_price = small_font.render(
+            sword_price_text,
+            True,
+            (255, 215, 0) if player.blade_level < 3 else (180, 255, 180)
+        )
+        screen.blit(
+            sword_price,
+            (
+                sword_box_rect.x + sword_box_rect.width // 2 - sword_price.get_width() // 2,
+                sword_box_rect.y + sword_box_rect.height + 4
+            )
+        )
         # Draw shop purchase boxes
+
+        # ESP
         esp_color = (120, 120, 120) if not player.shockwave_unlocked else (80, 180, 120)
-        wall_color = (120, 120, 120) if not player.wall_attack_unlocked else (80, 180, 120)
         pygame.draw.rect(screen, esp_color, esp_box_rect)
-        pygame.draw.rect(screen, wall_color, wall_box_rect)
         pygame.draw.rect(screen, (255, 255, 255), esp_box_rect, 1)
-        pygame.draw.rect(screen, (255, 255, 255), wall_box_rect, 1)
+
         esp_label = small_font.render("ESP", True, (255, 255, 255))
         screen.blit(esp_label, esp_label.get_rect(center=esp_box_rect.center))
- 
-        wall_label = small_font.render("Wall", True, (255, 255, 255))
-        screen.blit(wall_label, wall_label.get_rect(center=wall_box_rect.center))
+
         esp_price = small_font.render(f"{ESP_COST}g", True, (255, 215, 0))
-        wall_price = small_font.render(f"{WALL_COST}g", True, (255, 215, 0))
         if player.shockwave_unlocked:
             esp_price = small_font.render("Owned", True, (180, 255, 180))
-        if player.wall_attack_unlocked:
-            wall_price = small_font.render("Owned", True, (180, 255, 180))
-        screen.blit(esp_price, (esp_box_rect.x - esp_price.get_width() // 2 + shop_box_size // 2, esp_box_rect.y + esp_box_rect.height + 4))
-        screen.blit(wall_price, (wall_box_rect.x - wall_price.get_width() // 2 + shop_box_size // 2, wall_box_rect.y + wall_box_rect.height + 4))
 
-        speed_label = small_font.render(f"1 Speed {player.speed_level}/10", True, (255, 255, 255))
+        screen.blit(
+            esp_price,
+            (
+                esp_box_rect.x + esp_box_rect.width // 2 - esp_price.get_width() // 2,
+                esp_box_rect.y + esp_box_rect.height + 4
+            )
+        )
+
+        # Wall
+        if player.wall_level == 0:
+            wall_label_text = "Wall"
+            wall_price_text = f"{WALL_COST}g"
+        elif player.wall_level == 1:
+            wall_label_text = "Wall II"
+            wall_price_text = f"{WALL_UPGRADE_1_COST}g"
+        elif player.wall_level == 2:
+            wall_label_text = "Wall III"
+            wall_price_text = f"{WALL_UPGRADE_2_COST}g"
+        else:
+            wall_label_text = "Wall III"
+            wall_price_text = "Owned"
+
+        wall_color = (80, 180, 120) if player.wall_level == 3 else (120, 120, 120)
+        pygame.draw.rect(screen, wall_color, wall_box_rect)
+        pygame.draw.rect(screen, (255, 255, 255), wall_box_rect, 1)
+
+        wall_label = small_font.render(wall_label_text, True, (255, 255, 255))
+        screen.blit(wall_label, wall_label.get_rect(center=wall_box_rect.center))
+
+        wall_price = small_font.render(
+            wall_price_text,
+            True,
+            (255, 215, 0) if player.wall_level < 3 else (180, 255, 180)
+        )
+        screen.blit(
+            wall_price,
+            (
+                wall_box_rect.x + wall_box_rect.width // 2 - wall_price.get_width() // 2,
+                wall_box_rect.y + wall_box_rect.height + 4
+            )
+        )
+
+        speed_label = small_font.render(f"1 Speed {player.speed_level}/{player.get_stat_max('speed')}", True, (255, 255, 255))
         screen.blit(speed_label, (speed_upgrade_rect.x + 8, speed_upgrade_rect.y + 3))
-        damage_label = small_font.render(f"2 Damage {player.damage_level}/10", True, (255, 255, 255))
+        damage_label = small_font.render(f"2 Damage {player.damage_level}/{player.get_stat_max('damage')}", True, (255, 255, 255))
         screen.blit(damage_label, (damage_upgrade_rect.x + 8, damage_upgrade_rect.y + 3))
-        health_label = small_font.render(f"3 Health {player.health_level}/10", True, (255, 255, 255))
+        health_label = small_font.render(f"3 Health {player.health_level}/{player.get_stat_max('health')}", True, (255, 255, 255))
         screen.blit(health_label, (health_upgrade_rect.x + 8, health_upgrade_rect.y + 3))
-        regen_label = small_font.render(f"4 Regen {player.regen_level}/10", True, (255, 255, 255))
+        regen_label = small_font.render(f"4 Regen {player.regen_level}/{player.get_stat_max('regen')}", True, (255, 255, 255))
         screen.blit(regen_label, (regen_upgrade_rect.x + 8, regen_upgrade_rect.y + 3))
-        attack_size_label = small_font.render(f"5 Atk Size {player.attack_size_level}/10", True, (255, 255, 255))
+        attack_size_label = small_font.render(f"5 Atk Size {player.attack_size_level}/{player.get_stat_max('attack_size')}", True, (255, 255, 255))
         screen.blit(attack_size_label, (attack_size_upgrade_rect.x + 8, attack_size_upgrade_rect.y + 3))
-        attack_speed_label = small_font.render(f"6 Atk Speed {player.attack_speed_level}/10", True, (255, 255, 255))
+        attack_speed_label = small_font.render(f"6 Atk Speed {player.attack_speed_level}/{player.get_stat_max('attack_speed')}", True, (255, 255, 255))
         screen.blit(attack_speed_label, (attack_speed_upgrade_rect.x + 8, attack_speed_upgrade_rect.y + 3))
         
         if player.arrow_level == 0:
@@ -1578,7 +1995,7 @@ while running:
             overlay_height = int(cooldown_box_size * (1 - cooldown_percent))
             pygame.draw.rect(screen, (20, 20, 20), (cooldown_start_x + cooldown_spacing, cooldown_start_y, cooldown_box_size, overlay_height))
         
-        space_text = font.render("SPACE", True, (255, 255, 255))
+        space_text = font.render("_", True, (255, 255, 255))
         space_text_rect = space_text.get_rect(center=(cooldown_start_x + cooldown_spacing + cooldown_box_size // 2, cooldown_start_y + cooldown_box_size // 2))
         screen.blit(space_text, space_text_rect)
         
@@ -1636,6 +2053,36 @@ while running:
         btn_text = font.render("Restart", True, (255, 255, 255))
         btn_text_rect = btn_text.get_rect(center=restart_btn.center)
         screen.blit(btn_text, btn_text_rect)
+
+    if current_song_name:
+        elapsed = pygame.time.get_ticks() - song_text_start_time
+
+        slide_in_duration = 1200
+        hold_duration = 3500
+        slide_out_duration = 900
+        total_duration = slide_in_duration + hold_duration + slide_out_duration
+
+        if elapsed < total_duration:
+            song_surface = font.render(current_song_name, True, (255, 255, 255))
+
+            target_x = SCREEN_WIDTH - song_surface.get_width() - 50
+            offscreen_x = SCREEN_WIDTH + 20
+            y = SCREEN_HEIGHT - 110
+
+            if elapsed < slide_in_duration:
+                t = elapsed / slide_in_duration
+                eased_t = math.sin(t * math.pi / 2)
+                x = offscreen_x + (target_x - offscreen_x) * eased_t
+
+            elif elapsed < slide_in_duration + hold_duration:
+                x = target_x
+
+            else:
+                t = (elapsed - slide_in_duration - hold_duration) / slide_out_duration
+                eased_t = 1 - math.cos(t * math.pi / 2)
+                x = target_x + (offscreen_x - target_x) * eased_t
+
+            screen.blit(song_surface, (int(x), int(y)))
 
     pygame.display.flip()
 
