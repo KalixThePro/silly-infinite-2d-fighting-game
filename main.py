@@ -1570,7 +1570,27 @@ while running:
         q_text = font.render("Q", True, (255, 255, 255))
         q_text_rect = q_text.get_rect(center=(cooldown_start_x + cooldown_spacing * 2 + cooldown_box_size // 2, cooldown_start_y + cooldown_box_size // 2))
         screen.blit(q_text, q_text_rect)
-        
+        # Magnet (R) cooldown
+        if player.magnet_level > 0:
+            magnet_x = cooldown_start_x + cooldown_spacing * 3
+
+            magnet_ready = player.can_use_magnet()
+            magnet_color = (255, 215, 80) if magnet_ready else (130, 100, 50)
+
+            pygame.draw.rect(screen, magnet_color, (magnet_x, cooldown_start_y, cooldown_box_size, cooldown_box_size))
+            pygame.draw.rect(screen, (255, 255, 255), (magnet_x, cooldown_start_y, cooldown_box_size, cooldown_box_size), 2)
+
+            if not magnet_ready:
+                current_time = pygame.time.get_ticks()
+                elapsed = current_time - player.last_magnet_time
+                cooldown_percent = min(1.0, elapsed / player.magnet_cooldown)
+                overlay_height = int(cooldown_box_size * (1 - cooldown_percent))
+                pygame.draw.rect(screen, (20, 20, 20), (magnet_x, cooldown_start_y, cooldown_box_size, overlay_height))
+
+            r_text = font.render("R", True, (255, 255, 255))
+            r_text_rect = r_text.get_rect(center=(magnet_x + cooldown_box_size // 2, cooldown_start_y + cooldown_box_size // 2))
+            screen.blit(r_text, r_text_rect)
+
     elif game_state == "GAME_OVER":
         dim_overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         dim_overlay.set_alpha(150)
