@@ -39,25 +39,21 @@ font = pygame.font.SysFont("Arial", 24)
 small_font = pygame.font.SysFont("Arial", 18)
 large_font = pygame.font.SysFont("Arial", 64)
 
-# Load shop icons if available
-esp_icon = None
-wall_icon = None
 
-try:
-    esp_path = resource_path("assets/esp_icon.png")
-    esp_icon = pygame.image.load(esp_path).convert_alpha()
-    esp_icon = pygame.transform.smoothscale(esp_icon, (32, 32))
-except Exception as e:
-    print(f"Failed to load ESP icon from assets/esp_icon.png: {e}")
-    esp_icon = None
-
-try:
-    wall_path = resource_path("assets/wall_icon.png")
-    wall_icon = pygame.image.load(wall_path).convert_alpha()
-    wall_icon = pygame.transform.smoothscale(wall_icon, (32, 32))
-except Exception as e:
-    print(f"Failed to load Wall icon from assets/wall_icon.png: {e}")
-    wall_icon = None
+ESP_COST = 100
+WALL_COST = 50
+ARROWS_COST = 100
+MARKSMAN_COST = 150
+SNIPER_COST = 200
+SPINNY_SWORD_COST = 200
+DOUBLE_BLADE_COST = 200
+QUAD_BLADE_COST = 250
+LASER_COST = 500
+DOUBLE_LASER_COST = 500
+GOLD_PULSE_COST = 50
+GOLD_PULSE_UPGRADE_COST = 200
+MAGNET_COST = 200
+MAGNET_UPGRADE_COST = 300
 
 # --- GAME STATE CONTROL ---
 game_state = "PLAYING"  # Can be "PLAYING" or "GAME_OVER"
@@ -70,6 +66,14 @@ class Player:
         self.speed = 5
         self.radius = 15
         self.color = (0, 255, 204) # Teal
+        self.arrow_level = 0
+        self.blade_level = 0
+        self.laser_level = 0
+        self.gold_pulse_level = 0
+        self.last_arrow_time = 0
+        self.magnet_level = 0
+        self.last_magnet_time = 0
+        self.magnet_cooldown = 6000  # 6 seconds
         
         # HP Engine Variables
         self.base_max_hp = 100
@@ -99,23 +103,70 @@ class Player:
         self.attack_size_level = 0
         self.shockwave_unlocked = False
         self.wall_attack_unlocked = False
+        
+
+
         self.max_upgrades = 10
         self.last_regen_time = pygame.time.get_ticks()
         
         # Movement Direction Tracking
         self.facing_x = 0
         self.facing_y = -1  # Default facing up
+    def can_use_magnet(self):
+        if self.magnet_level <= 0:
+            return False
+        current_time = pygame.time.get_ticks()
+        return current_time - self.last_magnet_time >= self.magnet_cooldown
+
+    def use_magnet(self):
+        if self.can_use_magnet():
+            self.last_magnet_time = pygame.time.get_ticks()
+            return True
+        return False
+    def get_arrow_cooldown(self):
+        if self.arrow_level == 1:
+            return 1000
+        if self.arrow_level == 2:
+            return 500
+        if self.arrow_level == 3:
+            return 300
+        return None
+
+    def get_arrow_damage(self):
+        if self.arrow_level == 1:
+            return 3
+        if self.arrow_level == 2:
+            return 4.5
+        if self.arrow_level == 3:
+            return 9
+        return 0
+
+    def get_arrow_speed(self):
+        if self.arrow_level == 2:
+            return 24
+        return 8
+
+    def can_fire_arrow(self):
+        if self.arrow_level <= 0:
+            return False
+        current_time = pygame.time.get_ticks()
+        return current_time - self.last_arrow_time >= self.get_arrow_cooldown()
+
+    def use_arrow(self):
+        self.last_arrow_time = pygame.time.get_ticks()
 
     def get_speed_multiplier(self):
         return 1.0 + self.speed_level * 0.1
 
     def get_damage_multiplier(self):
-        return 1.0 + self.damage_level * 0.1
+        return 1.0 + self.damage_level * 0.3
 
     def get_shockwave_max_radius(self):
         return 250 + self.attack_size_level * 20
 
     def get_shockwave_count(self):
+        if self.attack_size_level >= 8:
+            return 4
         if self.attack_size_level >= 5:
             return 3
         if self.attack_size_level >= 2:
@@ -145,13 +196,13 @@ class Player:
         move_y = 0
         actual_speed = self.speed * self.get_speed_multiplier()
         
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
+        if keys[pygame.K_UP]:
             move_y -= actual_speed
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+        if keys[pygame.K_DOWN]:
             move_y += actual_speed
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+        if keys[pygame.K_LEFT]:
             move_x -= actual_speed
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+        if keys[pygame.K_RIGHT]:
             move_x += actual_speed
         
         # Update facing direction if moving
@@ -212,7 +263,10 @@ class Player:
         current_time = pygame.time.get_ticks()
         elapsed = current_time - self.last_q_attack_time
         return min(1.0, elapsed / self.q_attack_cooldown)
-
+def is_on_screen(item, camera_x, camera_y):
+    screen_x = item.x + camera_x
+    screen_y = item.y + camera_y
+    return 0 <= screen_x <= SCREEN_WIDTH and 0 <= screen_y <= SCREEN_HEIGHT
 class EnemyProjectile:
     def __init__(self, x, y, target_x, target_y, damage=5):
         self.x = x
@@ -248,6 +302,27 @@ class BigEnemyProjectile:
 
         self.dx = (dx / dist) if dist > 0 else 0
         self.dy = (dy / dist) if dist > 0 else 0
+
+    def update(self):
+        self.x += self.dx * self.speed
+        self.y += self.dy * self.speed
+
+class PlayerArrow:
+    def __init__(self, x, y, target, damage, speed):
+        self.x = x
+        self.y = y
+        self.damage = damage
+        self.speed = speed
+        self.radius = 5
+        self.color = (230, 230, 120)
+        self.is_active = True
+
+        dx = target.x - x
+        dy = target.y - y
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        self.dx = (dx / dist) if dist > 0 else 0
+        self.dy = (dy / dist) if dist > 0 else -1
 
     def update(self):
         self.x += self.dx * self.speed
@@ -360,10 +435,13 @@ class HealItem:
         return dist < (self.radius + player_radius)
 
 class XPItem:
+
     def __init__(self, x, y, xp_amount=1):
         self.x = x
         self.y = y
         self.radius = 6
+        self.magnetized = False
+        self.magnet_start_time = 0
         self.color = (0, 100, 255)  # Blue
         self.xp_amount = xp_amount
         if xp_amount > 1:
@@ -373,6 +451,16 @@ class XPItem:
         dx = player_x - self.x
         dy = player_y - self.y
         dist = math.sqrt(dx**2 + dy**2)
+
+        if self.magnetized:
+            elapsed = pygame.time.get_ticks() - self.magnet_start_time
+            pull_speed = 4 + (elapsed / 1000) ** 2 * 60
+
+            if dist > 0:
+                self.x += (dx / dist) * min(pull_speed, dist)
+                self.y += (dy / dist) * min(pull_speed, dist)
+            return
+
         follow_radius = 150
         follow_speed = 2.5
         if 0 < dist < follow_radius:
@@ -386,17 +474,29 @@ class XPItem:
         return dist < (self.radius + player_radius)
 
 class GoldItem:
+
     def __init__(self, x, y, gold_amount=1):
         self.x = x
         self.y = y
         self.radius = 7
         self.color = (220, 180, 40)
         self.gold_amount = gold_amount
-
+        self.magnetized = False
+        self.magnet_start_time = 0
     def update(self, player_x, player_y):
         dx = player_x - self.x
         dy = player_y - self.y
         dist = math.sqrt(dx**2 + dy**2)
+
+        if self.magnetized:
+            elapsed = pygame.time.get_ticks() - self.magnet_start_time
+            pull_speed = 4 + (elapsed / 1000) ** 2 * 60
+
+            if dist > 0:
+                self.x += (dx / dist) * min(pull_speed, dist)
+                self.y += (dy / dist) * min(pull_speed, dist)
+            return
+
         follow_radius = 50
         follow_speed = 2.5
         if 0 < dist < follow_radius:
@@ -541,6 +641,9 @@ class Enemy:
         self.type = enemy_type
         self.damage = 10
         self.projectile_damage = 0
+        self.knockback_x = 0
+        self.knockback_y = 0
+        self.knockback_friction = 0.88
 
         if enemy_type == "CHASER":
             self.speed = 2.5
@@ -550,7 +653,7 @@ class Enemy:
             self.is_waiting = False
             self.wait_start_time = 0
             self.hp = 5
-            self.damage = 20
+            self.damage = 7
             self.projectile_damage = 5
 
         elif enemy_type == "SPEEDY":
@@ -558,7 +661,7 @@ class Enemy:
             self.color = (255, 153, 0)
             self.radius = 8
             self.hp = 1
-            self.damage = 10
+            self.damage = 3
             self.projectile_damage = 0
 
         elif enemy_type == "TANK":
@@ -570,8 +673,8 @@ class Enemy:
             self.is_waiting = False
             self.wait_start_time = 0
             self.hp = 20
-            self.damage = 50
-            self.projectile_damage = 20
+            self.damage = 20
+            self.projectile_damage = 10
 
     def update_behavior(self, player_x, player_y, enemy_projectiles_list, all_enemies):
         dx = player_x - self.x
@@ -630,7 +733,7 @@ class Enemy:
                     move_x = (self.x - player_x) / distance * self.speed
                     move_y = (self.y - player_y) / distance * self.speed
 
-        separation_distance = 70
+        separation_distance = 30
         separation_force = 1.2
         for other in all_enemies:
             if other is self:
@@ -644,8 +747,23 @@ class Enemy:
                 move_x += (s_dx / s_dist) * separation_force
                 move_y += (s_dy / s_dist) * separation_force
 
-        self.x += move_x
-        self.y += move_y
+        knockback_speed = math.sqrt(self.knockback_x**2 + self.knockback_y**2)
+
+        if knockback_speed > 0.5:
+            move_x *= 0.35
+            move_y *= 0.35
+
+        self.x += move_x + self.knockback_x
+        self.y += move_y + self.knockback_y
+
+        self.knockback_x *= self.knockback_friction
+        self.knockback_y *= self.knockback_friction
+
+        if abs(self.knockback_x) < 0.05:
+            self.knockback_x = 0
+        if abs(self.knockback_y) < 0.05:
+            self.knockback_y = 0
+
 
 
 # --- ENTITY GENERATION SYSTEM ---
@@ -658,6 +776,9 @@ heal_items = []
 xp_items = []
 gold_items = []
 charges = []
+player_arrows = []
+sniper_trails = []
+
 
 # Enemy spawn timing settings
 SPAWN_INTERVAL_BASE = 1500
@@ -665,11 +786,11 @@ SPAWN_INTERVAL_BASE = 1500
 ENEMY_STAT_SCALING_INTERVAL = 10000
 ENEMY_STAT_SCALING_FACTOR = 1.05
 
-SPAWN_INTERVAL_SCALING_INTERVAL = 10000
-SPAWN_INTERVAL_SCALING_FACTOR = 0.95
+SPAWN_INTERVAL_SCALING_INTERVAL = 1000
+SPAWN_INTERVAL_SCALING_FACTOR = 0.98
 MIN_SPAWN_INTERVAL = 250
 
-TANK_SPAWN_DELAY = 40000
+TANK_SPAWN_DELAY = 20000
 
 spawn_start_time = pygame.time.get_ticks()
 last_spawn_time = spawn_start_time
@@ -710,7 +831,7 @@ def spawn_enemy_offscreen():
     enemies.append(enemy)
 
 def reset_game():
-    global player, enemies, enemy_projectiles, game_state, shockwaves, slashes, heal_items, xp_items, gold_items, charges, spawn_start_time, last_spawn_time
+    global player, enemies, enemy_projectiles, game_state, shockwaves, slashes, heal_items, xp_items, gold_items, charges, player_arrows, sniper_trails, spawn_start_time, last_spawn_time
     player = Player()
     enemies = []
     enemy_projectiles = []
@@ -720,6 +841,8 @@ def reset_game():
     xp_items = []
     gold_items = []
     charges = []
+    player_arrows = []
+    sniper_trails = []
     game_state = "PLAYING"
     spawn_start_time = pygame.time.get_ticks()
     last_spawn_time = spawn_start_time
@@ -750,13 +873,36 @@ while running:
     shop_start_y = 20
     esp_box_rect = pygame.Rect(shop_start_x, shop_start_y, shop_box_size, shop_box_size)
     wall_box_rect = pygame.Rect(shop_start_x, shop_start_y + shop_box_size + 20, shop_box_size, shop_box_size)
-
+    arrow_box_rect = pygame.Rect(shop_start_x - 90, shop_start_y + (shop_box_size + 20) * 2, 130, shop_box_size)
+    magnet_box_rect = pygame.Rect(shop_start_x - 90, shop_start_y + (shop_box_size + 20) * 3, 130, shop_box_size)
     # 1. ENGINE INPUT EVENTS
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             
         if game_state == "PLAYING":
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1 and player.stat_points > 0 and player.speed_level < player.max_upgrades:
+                    player.speed_level += 1
+                    player.stat_points -= 1
+
+                elif event.key == pygame.K_2 and player.stat_points > 0 and player.damage_level < player.max_upgrades:
+                    player.damage_level += 1
+                    player.stat_points -= 1
+
+                elif event.key == pygame.K_3 and player.stat_points > 0 and player.health_level < player.max_upgrades:
+                    player.health_level += 1
+                    player.base_max_hp += 20
+                    player.hp = min(player.hp + 20, player.get_max_hp())
+                    player.stat_points -= 1
+
+                elif event.key == pygame.K_4 and player.stat_points > 0 and player.regen_level < player.max_upgrades:
+                    player.regen_level += 1
+                    player.stat_points -= 1
+
+                elif event.key == pygame.K_5 and player.stat_points > 0 and player.attack_size_level < player.max_upgrades:
+                    player.attack_size_level += 1
+                    player.stat_points -= 1
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.speed_level < player.max_upgrades:
                     player.speed_level += 1
@@ -775,12 +921,30 @@ while running:
                 if attack_size_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_size_level < player.max_upgrades:
                     player.attack_size_level += 1
                     player.stat_points -= 1
-                if esp_box_rect.collidepoint(event.pos) and not player.shockwave_unlocked and player.gold >= 20:
-                    player.gold -= 20
+                if magnet_box_rect.collidepoint(event.pos):
+                    if player.magnet_level == 0 and player.gold >= MAGNET_COST:
+                        player.gold -= MAGNET_COST
+                        player.magnet_level = 1
+                    elif player.magnet_level == 1 and player.gold >= MAGNET_UPGRADE_COST:
+                        player.gold -= MAGNET_UPGRADE_COST
+                        player.magnet_level = 2
+                if esp_box_rect.collidepoint(event.pos) and not player.shockwave_unlocked and player.gold >= ESP_COST:
+                    player.gold -= ESP_COST
                     player.shockwave_unlocked = True
-                if wall_box_rect.collidepoint(event.pos) and not player.wall_attack_unlocked and player.gold >= 50:
-                    player.gold -= 50
+                if wall_box_rect.collidepoint(event.pos) and not player.wall_attack_unlocked and player.gold >= WALL_COST:
+                    player.gold -= WALL_COST
                     player.wall_attack_unlocked = True
+                if arrow_box_rect.collidepoint(event.pos):
+                    if player.arrow_level == 0 and player.gold >= ARROWS_COST:
+                        player.gold -= ARROWS_COST
+                        player.arrow_level = 1
+                    elif player.arrow_level == 1 and player.gold >= MARKSMAN_COST:
+                        player.gold -= MARKSMAN_COST
+                        player.arrow_level = 2
+                    elif player.arrow_level == 2 and player.gold >= SNIPER_COST:
+                        player.gold -= SNIPER_COST
+                        player.arrow_level = 3
+                      
         elif game_state == "GAME_OVER":
             if event.type == pygame.MOUSEBUTTONDOWN:
                 restart_btn = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 + 20, 200, 50)
@@ -790,6 +954,9 @@ while running:
     # 2. RUNTIME LOGIC CALCULATIONS
     if game_state == "PLAYING":
         current_time = pygame.time.get_ticks()
+        for trail in sniper_trails[:]:
+            if current_time - trail["spawn_time"] >= trail["duration"]:
+                sniper_trails.remove(trail)  
         spawn_interval_scale = get_spawn_interval_scale()
         current_spawn_interval = max(MIN_SPAWN_INTERVAL, int(SPAWN_INTERVAL_BASE * spawn_interval_scale))
         if current_time - last_spawn_time >= current_spawn_interval:
@@ -805,7 +972,16 @@ while running:
                 wave_count = player.get_shockwave_count()
                 for i in range(wave_count):
                     shockwaves.append(Shockwave(player.x, player.y, delay=i * 200, max_radius=player.get_shockwave_max_radius()))
-        
+        if keys[pygame.K_r]:
+            if player.use_magnet():
+                camera_x = SCREEN_WIDTH // 2 - player.x
+                camera_y = SCREEN_HEIGHT // 2 - player.y
+                current_time = pygame.time.get_ticks()
+
+                for item in xp_items + gold_items:
+                    if player.magnet_level >= 2 or is_on_screen(item, camera_x, camera_y):
+                        item.magnetized = True
+                        item.magnet_start_time = current_time
         if keys[pygame.K_SPACE]:
             if player.use_slash():
                 slashes.append(Slash(player))
@@ -813,7 +989,42 @@ while running:
         if keys[pygame.K_q]:
             if player.use_q_attack():
                 charges.append(WallCharge(player, player.facing_x, player.facing_y))
+        if player.can_fire_arrow() and enemies:
+            nearest_enemy = min(
+                enemies,
+                key=lambda enemy: (enemy.x - player.x) ** 2 + (enemy.y - player.y) ** 2
+            )
 
+            player.use_arrow()
+
+            if player.arrow_level == 3:
+                sniper_trails.append({
+                    "start_x": player.x,
+                    "start_y": player.y,
+                    "end_x": nearest_enemy.x,
+                    "end_y": nearest_enemy.y,
+                    "spawn_time": pygame.time.get_ticks(),
+                    "duration": 100
+                })
+
+                nearest_enemy.hp -= player.get_arrow_damage()
+                if nearest_enemy.hp <= 0:
+                    if random.random() < 0.1:
+                        heal_items.append(HealItem(nearest_enemy.x, nearest_enemy.y))
+                    else:
+                        drop_xp_for_enemy(nearest_enemy, xp_items)
+                    drop_gold_for_enemy(nearest_enemy, gold_items)
+                    enemies.remove(nearest_enemy)
+            else:
+                player_arrows.append(
+                    PlayerArrow(
+                        player.x,
+                        player.y,
+                        nearest_enemy,
+                        player.get_arrow_damage(),
+                        player.get_arrow_speed()
+                    )
+                )
         # Update shockwaves and apply knockback
         for shockwave in shockwaves[:]:
             shockwave.update()
@@ -822,8 +1033,11 @@ while running:
             else:
                 # Apply knockback to enemies once per target
                 for enemy in enemies[:]:
-                    knockback_x = shockwave.get_knockback_force(enemy.x, enemy.y)
-                    if knockback_x != 0 and enemy not in shockwave.hit_enemies:
+                    dx = enemy.x - shockwave.x
+                    dy = enemy.y - shockwave.y
+                    dist = math.sqrt(dx**2 + dy**2)
+
+                    if dist <= shockwave.current_radius and dist > 0 and enemy not in shockwave.hit_enemies:
                         shockwave.hit_enemies.add(enemy)
                         enemy.hp -= shockwave.damage
                         if enemy.hp <= 0:
@@ -837,10 +1051,11 @@ while running:
                         dx = enemy.x - shockwave.x
                         dy = enemy.y - shockwave.y
                         dist = math.sqrt(dx**2 + dy**2)
+
                         if dist > 0:
-                            knockback_force = 30
-                            enemy.x += (dx / dist) * knockback_force
-                            enemy.y += (dy / dist) * knockback_force
+                            knockback_force = 28
+                            enemy.knockback_x += (dx / dist) * knockback_force
+                            enemy.knockback_y += (dy / dist) * knockback_force
 
         # Update slashes and check hits
         for slash in slashes[:]:
@@ -911,7 +1126,31 @@ while running:
                 enemy_projectiles.remove(proj)
             elif math.sqrt((proj.x - player.x)**2 + (proj.y - player.y)**2) > 1500:
                 enemy_projectiles.remove(proj)
+        for arrow in player_arrows[:]:
+            arrow.update()
 
+            for enemy in enemies[:]:
+                dx = arrow.x - enemy.x
+                dy = arrow.y - enemy.y
+                dist = math.sqrt(dx**2 + dy**2)
+
+                if dist < arrow.radius + enemy.radius:
+                    enemy.hp -= arrow.damage
+                    arrow.is_active = False
+
+                    if enemy.hp <= 0:
+                        if random.random() < 0.1:
+                            heal_items.append(HealItem(enemy.x, enemy.y))
+                        else:
+                            drop_xp_for_enemy(enemy, xp_items)
+                        drop_gold_for_enemy(enemy, gold_items)
+                        enemies.remove(enemy)
+                    break
+
+            if not arrow.is_active:
+                player_arrows.remove(arrow)
+            elif math.sqrt((arrow.x - player.x) ** 2 + (arrow.y - player.y) ** 2) > 1500:
+                player_arrows.remove(arrow)
         # Collect heal items
         for heal_item in heal_items[:]:
             if heal_item.is_collected(player.x, player.y, player.radius):
@@ -937,7 +1176,7 @@ while running:
 
         # Collect XP items
         for xp_item in xp_items[:]:
-            if xp_item.is_collected(player.x, player.y, player.radius):
+            if xp_item.is_collected(player.x, player.y, player.radius) or (xp_item.magnetized and pygame.time.get_ticks() - xp_item.magnet_start_time >= 1000):
                 player.experience += xp_item.xp_amount
                 while player.experience >= player.max_experience:
                     player.experience -= player.max_experience
@@ -948,7 +1187,7 @@ while running:
 
         # Collect gold items
         for gold_item in gold_items[:]:
-            if gold_item.is_collected(player.x, player.y, player.radius):
+            if gold_item.is_collected(player.x, player.y, player.radius) or (gold_item.magnetized and pygame.time.get_ticks() - gold_item.magnet_start_time >= 1000):
                 player.gold += gold_item.gold_amount
                 gold_items.remove(gold_item)
 
@@ -1026,6 +1265,33 @@ while running:
     for xp_item in xp_items:
         pygame.draw.circle(screen, xp_item.color, (int(xp_item.x + camera_x), int(xp_item.y + camera_y)), xp_item.radius)
 
+    # Draw Arrows
+    for arrow in player_arrows:
+        pygame.draw.circle(
+            screen,
+            arrow.color,
+            (int(arrow.x + camera_x), int(arrow.y + camera_y)),
+            arrow.radius
+        )
+    for trail in sniper_trails:
+        age = pygame.time.get_ticks() - trail["spawn_time"]
+        alpha = max(0, 255 - int(255 * (age / trail["duration"])))
+
+        trail_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+
+        start_pos = (
+            int(trail["start_x"] + camera_x),
+            int(trail["start_y"] + camera_y)
+        )
+        end_pos = (
+            int(trail["end_x"] + camera_x),
+            int(trail["end_y"] + camera_y)
+        )
+
+        pygame.draw.line(trail_surface, (255, 245, 150, alpha), start_pos, end_pos, 4)
+        pygame.draw.line(trail_surface, (255, 255, 255, alpha), start_pos, end_pos, 1)
+
+        screen.blit(trail_surface, (0, 0))
     # Draw gold items
     for gold_item in gold_items:
         pygame.draw.circle(screen, gold_item.color, (int(gold_item.x + camera_x), int(gold_item.y + camera_y)), gold_item.radius)
@@ -1071,15 +1337,35 @@ while running:
 
     # Output static centered display anchor for player circle
     pygame.draw.circle(screen, player.color, (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2), player.radius)
+    eye_offset = 7
+    eye_radius = 3
+    eye_spread = 5
 
-    # --- CANVAS OVERLAY UI ENGINE ---
+    facing_angle = math.atan2(player.facing_y, player.facing_x)
+    side_x = math.cos(facing_angle + math.pi / 2)
+    side_y = math.sin(facing_angle + math.pi / 2)
+
+    eye_center_x = SCREEN_WIDTH // 2 + player.facing_x * eye_offset
+    eye_center_y = SCREEN_HEIGHT // 2 + player.facing_y * eye_offset
+
+    left_eye = (
+        int(eye_center_x + side_x * eye_spread),
+        int(eye_center_y + side_y * eye_spread)
+    )
+    right_eye = (
+        int(eye_center_x - side_x * eye_spread),
+        int(eye_center_y - side_y * eye_spread)
+    )
+
+    pygame.draw.circle(screen, (10, 20, 20), left_eye, eye_radius)
+    pygame.draw.circle(screen, (10, 20, 20), right_eye, eye_radius)
+        # --- CANVAS OVERLAY UI ENGINE ---
     if game_state == "PLAYING":
         # HP Bar
         bar_width = 400
         bar_height = 25
         bar_x = (SCREEN_WIDTH - bar_width) // 2
-        bar_y = SCREEN_HEIGHT - 50
-        
+        bar_y = SCREEN_HEIGHT - 50        
         pygame.draw.rect(screen, (60, 60, 60), (bar_x, bar_y, bar_width, bar_height))
         hp_percent = max(0, player.hp / player.get_max_hp())
         fill_width = int(bar_width * hp_percent)
@@ -1149,20 +1435,13 @@ while running:
         pygame.draw.rect(screen, wall_color, wall_box_rect)
         pygame.draw.rect(screen, (255, 255, 255), esp_box_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), wall_box_rect, 1)
-        if esp_icon:
-            esp_icon_rect = esp_icon.get_rect(center=esp_box_rect.center)
-            screen.blit(esp_icon, esp_icon_rect)
-        else:
-            esp_label = small_font.render("ESP", True, (255, 255, 255))
-            screen.blit(esp_label, esp_label.get_rect(center=esp_box_rect.center))
-        if wall_icon:
-            wall_icon_rect = wall_icon.get_rect(center=wall_box_rect.center)
-            screen.blit(wall_icon, wall_icon_rect)
-        else:
-            wall_label = small_font.render("Wall", True, (255, 255, 255))
-            screen.blit(wall_label, wall_label.get_rect(center=wall_box_rect.center))
-        esp_price = small_font.render("20g", True, (255, 215, 0))
-        wall_price = small_font.render("50g", True, (255, 215, 0))
+        esp_label = small_font.render("ESP", True, (255, 255, 255))
+        screen.blit(esp_label, esp_label.get_rect(center=esp_box_rect.center))
+ 
+        wall_label = small_font.render("Wall", True, (255, 255, 255))
+        screen.blit(wall_label, wall_label.get_rect(center=wall_box_rect.center))
+        esp_price = small_font.render(f"{ESP_COST}g", True, (255, 215, 0))
+        wall_price = small_font.render(f"{WALL_COST}g", True, (255, 215, 0))
         if player.shockwave_unlocked:
             esp_price = small_font.render("Owned", True, (180, 255, 180))
         if player.wall_attack_unlocked:
@@ -1170,17 +1449,74 @@ while running:
         screen.blit(esp_price, (esp_box_rect.x - esp_price.get_width() // 2 + shop_box_size // 2, esp_box_rect.y + esp_box_rect.height + 4))
         screen.blit(wall_price, (wall_box_rect.x - wall_price.get_width() // 2 + shop_box_size // 2, wall_box_rect.y + wall_box_rect.height + 4))
 
-        speed_label = small_font.render(f"Speed {player.speed_level}/10", True, (255, 255, 255))
+        speed_label = small_font.render(f"1 Speed {player.speed_level}/10", True, (255, 255, 255))
         screen.blit(speed_label, (speed_upgrade_rect.x + 8, speed_upgrade_rect.y + 3))
-        damage_label = small_font.render(f"Damage {player.damage_level}/10", True, (255, 255, 255))
+        damage_label = small_font.render(f"2 Damage {player.damage_level}/10", True, (255, 255, 255))
         screen.blit(damage_label, (damage_upgrade_rect.x + 8, damage_upgrade_rect.y + 3))
-        health_label = small_font.render(f"Health {player.health_level}/10", True, (255, 255, 255))
+        health_label = small_font.render(f"3 Health {player.health_level}/10", True, (255, 255, 255))
         screen.blit(health_label, (health_upgrade_rect.x + 8, health_upgrade_rect.y + 3))
-        regen_label = small_font.render(f"Regen {player.regen_level}/10", True, (255, 255, 255))
+        regen_label = small_font.render(f"4 Regen {player.regen_level}/10", True, (255, 255, 255))
         screen.blit(regen_label, (regen_upgrade_rect.x + 8, regen_upgrade_rect.y + 3))
-        attack_size_label = small_font.render(f"Atk Size {player.attack_size_level}/10", True, (255, 255, 255))
+        attack_size_label = small_font.render(f"5 Atk Size {player.attack_size_level}/10", True, (255, 255, 255))
         screen.blit(attack_size_label, (attack_size_upgrade_rect.x + 8, attack_size_upgrade_rect.y + 3))
         
+        if player.arrow_level == 0:
+            arrow_label_text = "Arrows"
+            arrow_price_text = f"{ARROWS_COST}g"
+        elif player.arrow_level == 1:
+            arrow_label_text = "Marksman"
+            arrow_price_text = f"{MARKSMAN_COST}g"
+        elif player.arrow_level == 2:
+            arrow_label_text = "Sniper"
+            arrow_price_text = f"{SNIPER_COST}g"
+        else:
+            arrow_label_text = "Sniper"
+            arrow_price_text = "Owned"
+
+        arrow_color = (80, 180, 120) if player.arrow_level == 3 else (120, 120, 120)
+        pygame.draw.rect(screen, arrow_color, arrow_box_rect)
+        pygame.draw.rect(screen, (255, 255, 255), arrow_box_rect, 1)
+
+        arrow_label = small_font.render(arrow_label_text, True, (255, 255, 255))
+        screen.blit(arrow_label, arrow_label.get_rect(center=arrow_box_rect.center))
+
+        arrow_price = small_font.render(arrow_price_text, True, (255, 215, 0) if player.arrow_level < 3 else (180, 255, 180))
+        screen.blit(
+            arrow_price,
+            (
+                arrow_box_rect.x + arrow_box_rect.width // 2 - arrow_price.get_width() // 2,
+                arrow_box_rect.y + arrow_box_rect.height + 4
+            )
+        )
+        if player.magnet_level == 0:
+            magnet_label_text = "Magnet"
+            magnet_price_text = f"{MAGNET_COST}g"
+        elif player.magnet_level == 1:
+            magnet_label_text = "Magnet II"
+            magnet_price_text = f"{MAGNET_UPGRADE_COST}g"
+        else:
+            magnet_label_text = "Magnet II"
+            magnet_price_text = "Owned"
+
+        magnet_color = (80, 180, 120) if player.magnet_level == 2 else (120, 120, 120)
+        pygame.draw.rect(screen, magnet_color, magnet_box_rect)
+        pygame.draw.rect(screen, (255, 255, 255), magnet_box_rect, 1)
+
+        magnet_label = small_font.render(magnet_label_text, True, (255, 255, 255))
+        screen.blit(magnet_label, magnet_label.get_rect(center=magnet_box_rect.center))
+
+        magnet_price = small_font.render(
+            magnet_price_text,
+            True,
+            (255, 215, 0) if player.magnet_level < 2 else (180, 255, 180)
+        )
+        screen.blit(
+            magnet_price,
+            (
+                magnet_box_rect.x + magnet_box_rect.width // 2 - magnet_price.get_width() // 2,
+                magnet_box_rect.y + magnet_box_rect.height + 4
+            )
+        )
         # Draw ability cooldown indicators
         cooldown_box_size = 40
         cooldown_spacing = 50
