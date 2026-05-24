@@ -4,7 +4,7 @@ import pygame
 import random
 import math
 
-
+played_track_name = None
 
 def resource_path(relative_path):
     """Get the correct asset path when running normally or inside PyInstaller."""
@@ -13,16 +13,26 @@ def resource_path(relative_path):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
 
 def play_next_song():
-    global current_track_index, current_song_name, song_text_start_time
-
+    global current_track_index, current_song_name, song_text_start_time, played_track_name, music_tracks
     if not music_tracks:
         return
 
-    current_track_index = (current_track_index + 1) % len(music_tracks)
+    last_song = current_song_name
+
+    current_track_index += 1
+
+    if current_track_index >= len(music_tracks):
+        random.shuffle(music_tracks)
+        current_track_index = 0
+
+        if len(music_tracks) > 1 and os.path.splitext(music_tracks[0])[0] == last_song:
+            music_tracks.append(music_tracks.pop(0))
+
     current_song_name = os.path.splitext(music_tracks[current_track_index])[0]
+    played_track_name = current_song_name
     song_text_start_time = pygame.time.get_ticks()
 
-    pygame.mixer.music.load(os.path.join(resource_path("assets"), music_tracks[current_track_index]))
+    pygame.mixer.music.load(os.path.join(resource_path("assets/music"), music_tracks[current_track_index]))
     pygame.mixer.music.play()
 
 # --- INITIALIZATION ---
@@ -35,9 +45,10 @@ song_text_start_time = 0
 song_text_duration = 3500
 try:
     pygame.mixer.init()
+    pygame.mixer.set_num_channels(100)
     music_loaded = False
     try:
-        music_folder = resource_path("assets")
+        music_folder = resource_path("assets/music")
         music_tracks = [
             file_name for file_name in os.listdir(music_folder)
             if file_name.lower().endswith((".mp3", ".ogg", ".wav"))
@@ -45,7 +56,7 @@ try:
 
         random.shuffle(music_tracks)
 
-        pygame.mixer.music.set_volume(0.5)
+        pygame.mixer.music.set_volume(0.7)
         pygame.mixer.music.set_endevent(MUSIC_END_EVENT)
 
         if music_tracks:
@@ -103,6 +114,25 @@ BOSS_SPAWN_EVENTS = [
     (310000, 10.0, 0.5),
 ]
 
+def load_sound(file_name, volume=0.5):
+    try:
+        sound = pygame.mixer.Sound(resource_path(f"assets/sfx/{file_name}"))
+        sound.set_volume(volume)
+        return sound
+    except Exception as e:
+        print(f"Failed to load sound {file_name}:", e)
+        return None
+
+def play_sound(sound):
+    if sound:
+        sound.play()
+
+slash_sfx = load_sound("slash.mp3", 0.45)
+shockwave_sfx = load_sound("shockwave.mp3", 1)
+wall_sfx = load_sound("wall.mp3", 1)
+magnet_sfx = load_sound("magnet.mp3", 1)
+arrow_sfx = load_sound("arrow.mp3", 1)
+
 # --- GAME STATE CONTROL ---
 game_state = "PLAYING"  # Can be "PLAYING" or "GAME_OVER"
 
@@ -113,7 +143,7 @@ class Player:
         self.y = 0  # World Y coordinate
         self.speed = 5
         self.radius = 15
-        self.color = (0, 255, 204) # Teal
+        self.color = (100, 100, 100) # grey
         self.arrow_level = 0
         self.blade_level = 0
         self.laser_level = 0
@@ -1042,7 +1072,7 @@ def set_spinning_swords_for_level():
         spinning_swords.append(SpinningSword(player, offset))
 
 def reset_game():
-    global player, enemies, enemy_projectiles, game_state, shockwaves, slashes, heal_items, xp_items, gold_items, charges, player_arrows, sniper_trails, spinning_swords, spawn_start_time, last_spawn_time, boss_spawn_index
+    global player, enemies, song_text_start_time, enemy_projectiles, game_state, shockwaves, slashes, heal_items, xp_items, gold_items, charges, player_arrows, sniper_trails, spinning_swords, spawn_start_time, last_spawn_time, boss_spawn_index
     player = Player()
     enemies = []
     enemy_projectiles = []
@@ -1059,6 +1089,7 @@ def reset_game():
     spawn_start_time = pygame.time.get_ticks()
     last_spawn_time = spawn_start_time
     boss_spawn_index = 0
+    song_text_start_time = pygame.time.get_ticks()
     try:
         if music_loaded:
             pygame.mixer.music.play()
@@ -1279,11 +1310,13 @@ while running:
         # Handle ability inputs
         if keys[pygame.K_e]:
             if player.use_shockwave():
+                play_sound(shockwave_sfx)
                 wave_count = player.get_shockwave_count()
                 for i in range(wave_count):
                     shockwaves.append(Shockwave(player.x, player.y, delay=i * 200, max_radius=player.get_shockwave_max_radius()))
         if keys[pygame.K_r]:
             if player.use_magnet():
+                play_sound(magnet_sfx)
                 camera_x = SCREEN_WIDTH // 2 - player.x
                 camera_y = SCREEN_HEIGHT // 2 - player.y
                 current_time = pygame.time.get_ticks()
@@ -1294,10 +1327,12 @@ while running:
                         item.magnet_start_time = current_time
         if keys[pygame.K_SPACE]:
             if player.use_slash():
+                play_sound(slash_sfx)
                 slashes.append(Slash(player))
         
         if keys[pygame.K_q]:
             if player.use_q_attack():
+                play_sound(wall_sfx)
                 forward_x = player.facing_x
                 forward_y = player.facing_y
 
@@ -1319,6 +1354,7 @@ while running:
             )
 
             player.use_arrow()
+            play_sound(arrow_sfx)
 
             if player.arrow_level == 3:
                 sniper_trails.append({
