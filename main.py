@@ -74,13 +74,15 @@ class Player:
         self.magnet_level = 0
         self.last_magnet_time = 0
         self.magnet_cooldown = 6000  # 6 seconds
-        
+        self.xp_growth_multiplier = 1.1
+        self.xp_growth_decay = 0.8
+
         # HP Engine Variables
         self.base_max_hp = 100
         self.hp = self.base_max_hp
         
         # Experience/Mana System
-        self.max_experience = 3
+        self.max_experience = 1
         self.experience = 0
         
         # Ability Cooldown Tracking
@@ -100,6 +102,7 @@ class Player:
         self.damage_level = 0
         self.health_level = 0
         self.regen_level = 0
+        self.attack_speed_level = 0
         self.attack_size_level = 0
         self.shockwave_unlocked = False
         self.wall_attack_unlocked = False
@@ -112,12 +115,14 @@ class Player:
         # Movement Direction Tracking
         self.facing_x = 0
         self.facing_y = -1  # Default facing up
+
+    def get_cooldown_multiplier(self):
+        return max(0.5, 1.0 - self.attack_speed_level * 0.05)
     def can_use_magnet(self):
         if self.magnet_level <= 0:
             return False
         current_time = pygame.time.get_ticks()
-        return current_time - self.last_magnet_time >= self.magnet_cooldown
-
+        return current_time - self.last_magnet_time >= self.magnet_cooldown * self.get_cooldown_multiplier()
     def use_magnet(self):
         if self.can_use_magnet():
             self.last_magnet_time = pygame.time.get_ticks()
@@ -125,12 +130,15 @@ class Player:
         return False
     def get_arrow_cooldown(self):
         if self.arrow_level == 1:
-            return 1000
-        if self.arrow_level == 2:
-            return 500
-        if self.arrow_level == 3:
-            return 300
-        return None
+            base_cooldown = 1000
+        elif self.arrow_level == 2:
+            base_cooldown = 500
+        elif self.arrow_level == 3:
+            base_cooldown = 300
+        else:
+            return None
+        
+        return base_cooldown * self.get_cooldown_multiplier()
 
     def get_arrow_damage(self):
         if self.arrow_level == 1:
@@ -218,11 +226,11 @@ class Player:
         if not self.shockwave_unlocked:
             return False
         current_time = pygame.time.get_ticks()
-        return current_time - self.last_shockwave_time >= self.shockwave_cooldown
+        return current_time - self.last_shockwave_time >= self.shockwave_cooldown * self.get_cooldown_multiplier()
     
     def can_use_slash(self):
         current_time = pygame.time.get_ticks()
-        return current_time - self.last_slash_time >= self.slash_cooldown
+        return current_time - self.last_slash_time >= self.slash_cooldown * self.get_cooldown_multiplier()
     
     def use_shockwave(self):
         if self.can_use_shockwave():
@@ -239,18 +247,20 @@ class Player:
     def get_shockwave_cooldown_percent(self):
         current_time = pygame.time.get_ticks()
         elapsed = current_time - self.last_shockwave_time
-        return min(1.0, elapsed / self.shockwave_cooldown)
+        cooldown = self.shockwave_cooldown * self.get_cooldown_multiplier()
+        return min(1.0, elapsed / cooldown)
     
     def get_slash_cooldown_percent(self):
         current_time = pygame.time.get_ticks()
         elapsed = current_time - self.last_slash_time
-        return min(1.0, elapsed / self.slash_cooldown)
+        cooldown = self.slash_cooldown * self.get_cooldown_multiplier()
+        return min(1.0, elapsed / cooldown)
     
     def can_use_q_attack(self):
         if not self.wall_attack_unlocked:
             return False
         current_time = pygame.time.get_ticks()
-        return current_time - self.last_q_attack_time >= self.q_attack_cooldown
+        return current_time - self.last_q_attack_time >= self.q_attack_cooldown * self.get_cooldown_multiplier()
     
     def use_q_attack(self):
         if self.can_use_q_attack() and not self.has_active_charge:
@@ -262,7 +272,9 @@ class Player:
     def get_q_attack_cooldown_percent(self):
         current_time = pygame.time.get_ticks()
         elapsed = current_time - self.last_q_attack_time
-        return min(1.0, elapsed / self.q_attack_cooldown)
+        cooldown = self.q_attack_cooldown * self.get_cooldown_multiplier()
+        return min(1.0, elapsed / cooldown)
+
 def is_on_screen(item, camera_x, camera_y):
     screen_x = item.x + camera_x
     screen_y = item.y + camera_y
@@ -868,6 +880,7 @@ while running:
     health_upgrade_rect = pygame.Rect(button_x, button_start_y + 60, button_width, button_height)
     regen_upgrade_rect = pygame.Rect(button_x, button_start_y + 90, button_width, button_height)
     attack_size_upgrade_rect = pygame.Rect(button_x, button_start_y + 120, button_width, button_height)
+    attack_speed_upgrade_rect = pygame.Rect(button_x, button_start_y + 150, button_width, button_height)
     shop_box_size = 40
     shop_start_x = SCREEN_WIDTH - 20 - shop_box_size
     shop_start_y = 20
@@ -903,6 +916,10 @@ while running:
                 elif event.key == pygame.K_5 and player.stat_points > 0 and player.attack_size_level < player.max_upgrades:
                     player.attack_size_level += 1
                     player.stat_points -= 1
+                
+                elif event.key == pygame.K_6 and player.stat_points > 0 and player.attack_speed_level < player.max_upgrades:
+                    player.attack_speed_level += 1
+                    player.stat_points -= 1
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.speed_level < player.max_upgrades:
                     player.speed_level += 1
@@ -920,6 +937,9 @@ while running:
                     player.stat_points -= 1
                 if attack_size_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_size_level < player.max_upgrades:
                     player.attack_size_level += 1
+                    player.stat_points -= 1
+                if attack_speed_upgrade_rect.collidepoint(event.pos) and player.stat_points > 0 and player.attack_speed_level < player.max_upgrades:
+                    player.attack_speed_level += 1
                     player.stat_points -= 1
                 if magnet_box_rect.collidepoint(event.pos):
                     if player.magnet_level == 0 and player.gold >= MAGNET_COST:
@@ -1182,10 +1202,11 @@ while running:
                     player.experience -= player.max_experience
                     player.stat_points += 1
                     player.total_stat_points += 1
-                    player.max_experience = math.ceil(player.max_experience * 1.1)
+                    player.max_experience = math.ceil(player.max_experience * player.xp_growth_multiplier)
+                    player.xp_growth_multiplier = 1.0 + (player.xp_growth_multiplier - 1.0) * player.xp_growth_decay
                 xp_items.remove(xp_item)
 
-        # Collect gold items
+        # Collect gold itemsD
         for gold_item in gold_items[:]:
             if gold_item.is_collected(player.x, player.y, player.radius) or (gold_item.magnetized and pygame.time.get_ticks() - gold_item.magnet_start_time >= 1000):
                 player.gold += gold_item.gold_amount
@@ -1403,12 +1424,14 @@ while running:
         health_upgrade_rect = pygame.Rect(button_x, button_start_y + 60, button_width, button_height)
         regen_upgrade_rect = pygame.Rect(button_x, button_start_y + 90, button_width, button_height)
         attack_size_upgrade_rect = pygame.Rect(button_x, button_start_y + 120, button_width, button_height)
-
+        attack_speed_upgrade_rect = pygame.Rect(button_x, button_start_y + 150, button_width, button_height)
         speed_ready = player.can_upgrade() and player.speed_level < player.max_upgrades
         damage_ready = player.can_upgrade() and player.damage_level < player.max_upgrades
         health_ready = player.can_upgrade() and player.health_level < player.max_upgrades
         regen_ready = player.can_upgrade() and player.regen_level < player.max_upgrades
         attack_size_ready = player.can_upgrade() and player.attack_size_level < player.max_upgrades
+        attack_speed_ready = player.can_upgrade() and player.attack_speed_level < player.max_upgrades
+        attack_speed_button_color = (100, 180, 255) if attack_speed_ready else (70, 70, 100)
 
         speed_button_color = (100, 180, 255) if speed_ready else (70, 70, 100)
         damage_button_color = (100, 180, 255) if damage_ready else (70, 70, 100)
@@ -1421,13 +1444,15 @@ while running:
         pygame.draw.rect(screen, health_button_color, health_upgrade_rect)
         pygame.draw.rect(screen, regen_button_color, regen_upgrade_rect)
         pygame.draw.rect(screen, attack_size_button_color, attack_size_upgrade_rect)
+        pygame.draw.rect(screen, attack_speed_button_color, attack_speed_upgrade_rect)
+
 
         pygame.draw.rect(screen, (255, 255, 255), speed_upgrade_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), damage_upgrade_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), health_upgrade_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), regen_upgrade_rect, 1)
         pygame.draw.rect(screen, (255, 255, 255), attack_size_upgrade_rect, 1)
-
+        pygame.draw.rect(screen, (255, 255, 255), attack_speed_upgrade_rect, 1)
         # Draw shop purchase boxes
         esp_color = (120, 120, 120) if not player.shockwave_unlocked else (80, 180, 120)
         wall_color = (120, 120, 120) if not player.wall_attack_unlocked else (80, 180, 120)
@@ -1459,6 +1484,8 @@ while running:
         screen.blit(regen_label, (regen_upgrade_rect.x + 8, regen_upgrade_rect.y + 3))
         attack_size_label = small_font.render(f"5 Atk Size {player.attack_size_level}/10", True, (255, 255, 255))
         screen.blit(attack_size_label, (attack_size_upgrade_rect.x + 8, attack_size_upgrade_rect.y + 3))
+        attack_speed_label = small_font.render(f"6 Atk Speed {player.attack_speed_level}/10", True, (255, 255, 255))
+        screen.blit(attack_speed_label, (attack_speed_upgrade_rect.x + 8, attack_speed_upgrade_rect.y + 3))
         
         if player.arrow_level == 0:
             arrow_label_text = "Arrows"
@@ -1583,7 +1610,7 @@ while running:
             if not magnet_ready:
                 current_time = pygame.time.get_ticks()
                 elapsed = current_time - player.last_magnet_time
-                cooldown_percent = min(1.0, elapsed / player.magnet_cooldown)
+                cooldown_percent = min(1.0, elapsed / (player.magnet_cooldown * player.get_cooldown_multiplier()))
                 overlay_height = int(cooldown_box_size * (1 - cooldown_percent))
                 pygame.draw.rect(screen, (20, 20, 20), (magnet_x, cooldown_start_y, cooldown_box_size, overlay_height))
 
