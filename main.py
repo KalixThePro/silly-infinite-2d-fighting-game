@@ -99,19 +99,20 @@ DOUBLE_LASER_COST = 500
 GOLD_PULSE_COST = 50
 GOLD_PULSE_UPGRADE_COST = 200
 MAGNET_COST = 200
-MAGNET_UPGRADE_COST = 300
+MAGNET_UPGRADE_COST = 1000
 STAT_MAX_UPGRADE_COST = 500
 STAT_MAX_UPGRADE_AMOUNT = 5
 WALL_UPGRADE_1_COST = 250
 WALL_UPGRADE_2_COST = 1000
 BOSS_SPAWN_EVENTS = [
-    (120000, 1.0, 1.0),
-    (180000, 2.0, 1.5),
-    (210000, 2.0, 5.0),
-    (250000, 4.0, 5.0),
-    (300000, 4.0, 5.0),
-    (310000, 4.5, 5.0),
-    (310000, 10.0, 0.5),
+    (120000, 1.0, 1.0), # 2:00
+    (180000, 2.0, 1.5), # 3:00
+    (200000, 2.0, 5.0), # 3:20
+    (230000, 4.0, 5.0), # 3:50
+    (250000, 4.0, 5.0), # 4:10
+    (280000, 4.5, 5.0), # 4:40
+    (281000, 10.0, 0.1), # 4:40
+    (282000, 5.0, 2.0), # 4:40
 ]
 
 def load_sound(file_name, volume=0.5):
@@ -668,11 +669,13 @@ class GoldItem:
 
 def drop_gold_for_enemy(enemy, gold_items_list):
     if enemy.type == "SPEEDY":
-        gold_amount = random.randint(3, 7)
+        gold_amount = random.randint(0, 2)
     elif enemy.type == "CHASER":
+        gold_amount = random.randint(1, 4)
+    elif enemy.type == "TANK":
         gold_amount = random.randint(5, 12)
-    else:
-        gold_amount = random.randint(10, 30)
+    elif enemy.type == "BOSS":
+        gold_amount = random.randint(50, 100)
     if gold_amount > 0:
         gold_items_list.append(GoldItem(enemy.x, enemy.y, gold_amount))
 
@@ -857,6 +860,8 @@ class Enemy:
             self.last_shot_time = 0
             self.last_stomp_time = 0
             self.hp = 250
+            self.max_hp = self.hp
+            self.last_regen_time = pygame.time.get_ticks()
             self.damage = 99999999
             self.projectile_damage = 18
 
@@ -919,6 +924,10 @@ class Enemy:
 
         elif self.type == "BOSS":
             current_time = pygame.time.get_ticks()
+
+            if current_time - self.last_regen_time >= 1000:
+                self.last_regen_time += 1000
+                self.hp = min(self.max_hp, self.hp + self.max_hp * 0.02)
 
             if distance > 220 and distance > 0:
                 move_x = (dx / distance) * self.speed
@@ -999,7 +1008,7 @@ ENEMY_STAT_SCALING_INTERVAL = 10000
 ENEMY_STAT_SCALING_FACTOR = 1.05
 
 SPAWN_INTERVAL_SCALING_INTERVAL = 1000
-SPAWN_INTERVAL_SCALING_FACTOR = 0.98
+SPAWN_INTERVAL_SCALING_FACTOR = 0.95
 MIN_SPAWN_INTERVAL = 250
 
 TANK_SPAWN_DELAY = 20000
@@ -1027,7 +1036,7 @@ def spawn_enemy_offscreen():
     
     roll = random.random()
     elapsed = pygame.time.get_ticks() - spawn_start_time
-    if elapsed >= TANK_SPAWN_DELAY and player.total_stat_points >= 3 and roll < 0.18:
+    if elapsed >= TANK_SPAWN_DELAY and player.total_stat_points >= 3 and roll < 0.01:
         enemy_type = "TANK"
     elif roll < 0.6:
         enemy_type = "CHASER"
@@ -1052,6 +1061,7 @@ def spawn_boss_offscreen(hp_multiplier=1.0, damage_multiplier=1.0):
 
     boss = Enemy(spawn_x, spawn_y, "BOSS")
     boss.hp *= hp_multiplier
+    boss.max_hp = boss.hp
     boss.damage *= damage_multiplier
     boss.projectile_damage *= damage_multiplier
     enemies.append(boss)
